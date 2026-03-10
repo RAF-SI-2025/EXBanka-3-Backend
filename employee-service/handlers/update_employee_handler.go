@@ -24,7 +24,17 @@ func NewUpdateEmployeeHandler(db *sql.DB) *UpdateEmployeeHandler {
 		Service: service,
 	}
 }
-
+// Handle godoc
+// @Summary Update employee
+// @Description Updates employee information
+// @Tags employees
+// @Accept json
+// @Produce json
+// @Param id path int true "Employee ID"
+// @Param request body models.UpdateEmployeeRequest true "Update employee request"
+// @Success 200 {object} models.Employee
+// @Failure 400 {string} string
+// @Router /employees/{id} [put]
 func (h *UpdateEmployeeHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	idStr := strings.TrimPrefix(r.URL.Path, "/employees/")
 	id, err := strconv.ParseInt(idStr, 10, 64)

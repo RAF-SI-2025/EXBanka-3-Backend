@@ -23,7 +23,19 @@ func NewGetEmployeesHandler(db *sql.DB) *GetEmployeesHandler {
 		Service: service,
 	}
 }
-
+// Handle godoc
+// @Summary List employees
+// @Description Returns all employees with optional filters
+// @Tags employees
+// @Produce json
+// @Param email query string false "Filter by email"
+// @Param first_name query string false "Filter by first name"
+// @Param last_name query string false "Filter by last name"
+// @Param position query string false "Filter by position"
+// @Success 200 {array} models.Employee
+// @Failure 401 {string} string
+// @Failure 403 {string} string
+// @Router /employees [get]
 func (h *GetEmployeesHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

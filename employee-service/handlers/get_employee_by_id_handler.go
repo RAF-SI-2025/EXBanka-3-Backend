@@ -23,7 +23,16 @@ func NewGetEmployeeByIDHandler(db *sql.DB) *GetEmployeeByIDHandler {
 		Service: service,
 	}
 }
-
+// Handle godoc
+// @Summary Get employee by ID
+// @Description Returns employee details by ID
+// @Tags employees
+// @Produce json
+// @Param id path int true "Employee ID"
+// @Success 200 {object} models.Employee
+// @Failure 400 {string} string
+// @Failure 404 {string} string
+// @Router /employees/{id} [get]
 func (h *GetEmployeeByIDHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	idStr := strings.TrimPrefix(r.URL.Path, "/employees/")
 	id, err := strconv.ParseInt(idStr, 10, 64)

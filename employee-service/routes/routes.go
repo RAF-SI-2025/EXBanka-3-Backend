@@ -10,6 +10,7 @@ import (
 	"employee-service/middleware"
 	"employee-service/repository"
 	"employee-service/services"
+	httpSwagger "github.com/swaggo/http-swagger"
 )
 
 func SetupRoutes(db *sql.DB) http.Handler {
@@ -35,6 +36,7 @@ func SetupRoutes(db *sql.DB) http.Handler {
 	}
 
 	mux.HandleFunc("/employees/health", handlers.HealthHandler)
+	mux.Handle("/swagger/", httpSwagger.WrapHandler)
 	mux.Handle("/employees/admin/me", adminOnly(http.HandlerFunc(handlers.AdminMeHandler)))
 
 	mux.Handle("/employees", adminOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

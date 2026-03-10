@@ -24,7 +24,15 @@ func NewEmployeePermissionsHandler(db *sql.DB) *EmployeePermissionsHandler {
 		Service: service,
 	}
 }
-
+// Handle godoc
+// @Summary Get employee permissions
+// @Description Returns employee permissions
+// @Tags employees
+// @Produce json
+// @Param id path int true "Employee ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string
+// @Router /employees/{id}/permissions [get]
 func (h *EmployeePermissionsHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/employees/")
 	path = strings.TrimSuffix(path, "/permissions")

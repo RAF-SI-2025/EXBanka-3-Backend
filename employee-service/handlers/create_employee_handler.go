@@ -25,7 +25,18 @@ func NewCreateEmployeeHandler(db *sql.DB) *CreateEmployeeHandler {
 		Service: service,
 	}
 }
-
+// Handle godoc
+// @Summary Create employee
+// @Description Creates employee and triggers credential creation in auth-service
+// @Tags employees
+// @Accept json
+// @Produce json
+// @Param request body models.CreateEmployeeRequest true "Create employee request"
+// @Success 201 {object} map[string]interface{}
+// @Failure 400 {string} string
+// @Failure 401 {string} string
+// @Failure 403 {string} string
+// @Router /employees [post]
 func (h *CreateEmployeeHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

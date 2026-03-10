@@ -24,7 +24,17 @@ func NewUpdateEmployeeActiveHandler(db *sql.DB) *UpdateEmployeeActiveHandler {
 		Service: service,
 	}
 }
-
+// Handle godoc
+// @Summary Update employee active status
+// @Description Activates or deactivates employee
+// @Tags employees
+// @Accept json
+// @Produce json
+// @Param id path int true "Employee ID"
+// @Param request body models.UpdateEmployeeActiveRequest true "Active status request"
+// @Success 200 {object} models.Employee
+// @Failure 400 {string} string
+// @Router /employees/{id}/active [patch]
 func (h *UpdateEmployeeActiveHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/employees/")
 	path = strings.TrimSuffix(path, "/active")

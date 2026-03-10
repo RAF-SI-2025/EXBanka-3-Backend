@@ -1,8 +1,15 @@
+// @title EXBanka Employee Service API
+// @version 1.0
+// @description Employee management service for EXBanka.
+// @host localhost:8080
+// @BasePath /
 package main
 
 import (
 	"log"
 	"net/http"
+
+	_ "employee-service/docs"
 
 	"employee-service/config"
 	"employee-service/database"

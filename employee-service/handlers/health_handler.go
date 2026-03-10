@@ -9,7 +9,13 @@ type HealthResponse struct {
 	Status  string `json:"status"`
 	Service string `json:"service"`
 }
-
+// HealthHandler godoc
+// @Summary Health check
+// @Description Returns employee-service status
+// @Tags employees
+// @Produce json
+// @Success 200 {object} handlers.HealthResponse
+// @Router /employees/health [get]
 func HealthHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
