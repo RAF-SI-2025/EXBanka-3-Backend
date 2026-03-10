@@ -1,8 +1,15 @@
+// @title EXBanka Auth Service API
+// @version 1.0
+// @description Authentication and credential management service for EXBanka.
+// @host localhost:8081
+// @BasePath /
 package main
 
 import (
 	"log"
 	"net/http"
+
+	_ "auth-service/docs"
 
 	"auth-service/config"
 	"auth-service/database"

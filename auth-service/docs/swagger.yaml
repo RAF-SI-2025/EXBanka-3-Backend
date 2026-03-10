@@ -1,0 +1,254 @@
+basePath: /
+definitions:
+  handlers.HealthResponse:
+    properties:
+      service:
+        type: string
+      status:
+        type: string
+    type: object
+  models.ActivateRequest:
+    properties:
+      activation_token:
+        type: string
+      confirm_password:
+        type: string
+      password:
+        type: string
+    type: object
+  models.CreateCredentialRequest:
+    properties:
+      email:
+        type: string
+      employee_id:
+        type: integer
+      is_active:
+        type: boolean
+    type: object
+  models.ForgotPasswordRequest:
+    properties:
+      email:
+        type: string
+    type: object
+  models.LoginRequest:
+    properties:
+      email:
+        type: string
+      password:
+        type: string
+    type: object
+  models.LoginResponse:
+    properties:
+      access_token:
+        type: string
+      refresh_token:
+        type: string
+      token_type:
+        type: string
+    type: object
+  models.RefreshRequest:
+    properties:
+      refresh_token:
+        type: string
+    type: object
+  models.RefreshResponse:
+    properties:
+      access_token:
+        type: string
+      token_type:
+        type: string
+    type: object
+  models.ResetPasswordRequest:
+    properties:
+      confirm_password:
+        type: string
+      password:
+        type: string
+      reset_token:
+        type: string
+    type: object
+host: localhost:8081
+info:
+  contact: {}
+  description: Authentication and credential management service for EXBanka.
+  title: EXBanka Auth Service API
+  version: "1.0"
+paths:
+  /auth/activate:
+    post:
+      consumes:
+      - application/json
+      description: Activates account using activation token and sets password
+      parameters:
+      - description: Activate request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.ActivateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+      summary: Activate account
+      tags:
+      - auth
+  /auth/forgot-password:
+    post:
+      consumes:
+      - application/json
+      description: Generates password reset token
+      parameters:
+      - description: Forgot password request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.ForgotPasswordRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+      summary: Forgot password
+      tags:
+      - auth
+  /auth/health:
+    get:
+      description: Returns auth-service status
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.HealthResponse'
+      summary: Health check
+      tags:
+      - auth
+  /auth/internal/create-credential:
+    post:
+      consumes:
+      - application/json
+      description: Internal endpoint for creating employee credentials
+      parameters:
+      - description: Create credential request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CreateCredentialRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+      summary: Create credential
+      tags:
+      - auth
+  /auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Authenticates user and returns access and refresh token
+      parameters:
+      - description: Login request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.LoginResponse'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+      summary: Login user
+      tags:
+      - auth
+  /auth/refresh:
+    post:
+      consumes:
+      - application/json
+      description: Generates a new access token using refresh token
+      parameters:
+      - description: Refresh request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.RefreshRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.RefreshResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+      summary: Refresh access token
+      tags:
+      - auth
+  /auth/reset-password:
+    post:
+      consumes:
+      - application/json
+      description: Resets password using reset token
+      parameters:
+      - description: Reset password request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.ResetPasswordRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+      summary: Reset password
+      tags:
+      - auth
+swagger: "2.0"

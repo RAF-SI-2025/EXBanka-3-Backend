@@ -29,7 +29,16 @@ func NewCreateCredentialHandler(db *sql.DB) *CreateCredentialHandler {
 		CredentialService: credentialService,
 	}
 }
-
+// Handle godoc
+// @Summary Create credential
+// @Description Internal endpoint for creating employee credentials
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param request body models.CreateCredentialRequest true "Create credential request"
+// @Success 201 {object} map[string]interface{}
+// @Failure 400 {string} string
+// @Router /auth/internal/create-credential [post]
 func (h *CreateCredentialHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

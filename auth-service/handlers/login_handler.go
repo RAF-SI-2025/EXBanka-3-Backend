@@ -29,7 +29,17 @@ func NewLoginHandler(db *sql.DB) *LoginHandler {
 		CredentialService: service,
 	}
 }
-
+// Handle godoc
+// @Summary Login user
+// @Description Authenticates user and returns access and refresh token
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param request body models.LoginRequest true "Login request"
+// @Success 200 {object} models.LoginResponse
+// @Failure 400 {string} string
+// @Failure 401 {string} string
+// @Router /auth/login [post]
 func (h *LoginHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

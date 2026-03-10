@@ -8,6 +8,8 @@ import (
 	"auth-service/handlers"
 	"auth-service/middleware"
 	"auth-service/services"
+
+	httpSwagger "github.com/swaggo/http-swagger"
 )
 
 func SetupRoutes(db *sql.DB) http.Handler {
@@ -21,6 +23,7 @@ func SetupRoutes(db *sql.DB) http.Handler {
 	)
 
 	mux.HandleFunc("/auth/health", handlers.HealthHandler)
+	mux.Handle("/swagger/", httpSwagger.WrapHandler)
 
 	createCredentialHandler := handlers.NewCreateCredentialHandler(db)
 	mux.HandleFunc("/auth/internal/create-credential", createCredentialHandler.Handle)

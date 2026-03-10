@@ -29,7 +29,16 @@ func NewActivateHandler(db *sql.DB) *ActivateHandler {
 		CredentialService: service,
 	}
 }
-
+// Handle godoc
+// @Summary Activate account
+// @Description Activates account using activation token and sets password
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param request body models.ActivateRequest true "Activate request"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string
+// @Router /auth/activate [post]
 func (h *ActivateHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != http.MethodPost {

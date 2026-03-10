@@ -29,7 +29,16 @@ func NewForgotPasswordHandler(db *sql.DB) *ForgotPasswordHandler {
 		CredentialService: service,
 	}
 }
-
+// Handle godoc
+// @Summary Forgot password
+// @Description Generates password reset token
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param request body models.ForgotPasswordRequest true "Forgot password request"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string
+// @Router /auth/forgot-password [post]
 func (h *ForgotPasswordHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

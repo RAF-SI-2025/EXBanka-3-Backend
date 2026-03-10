@@ -29,7 +29,16 @@ func NewResetPasswordHandler(db *sql.DB) *ResetPasswordHandler {
 		CredentialService: service,
 	}
 }
-
+// Handle godoc
+// @Summary Reset password
+// @Description Resets password using reset token
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param request body models.ResetPasswordRequest true "Reset password request"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string
+// @Router /auth/reset-password [post]
 func (h *ResetPasswordHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

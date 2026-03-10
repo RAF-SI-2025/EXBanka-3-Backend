@@ -29,7 +29,16 @@ func NewRefreshHandler(db *sql.DB) *RefreshHandler {
 		CredentialService: service,
 	}
 }
-
+// Handle godoc
+// @Summary Refresh access token
+// @Description Generates a new access token using refresh token
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param request body models.RefreshRequest true "Refresh request"
+// @Success 200 {object} models.RefreshResponse
+// @Failure 401 {string} string
+// @Router /auth/refresh [post]
 func (h *RefreshHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
