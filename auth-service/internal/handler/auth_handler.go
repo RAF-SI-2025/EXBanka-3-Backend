@@ -3,11 +3,10 @@ package handler
 import (
 	"context"
 
-	authv1 "EXBanka/gen/proto/auth/v1"
-	"EXBanka/internal/config"
-	infrasvc "EXBanka/internal/service"
-	"EXBanka/backend/internal/service"
-
+	authv1 "github.com/RAF-SI-2025/EXBanka-3-Backend/auth-service/gen/proto/auth/v1"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/auth-service/internal/config"
+	authsvc "github.com/RAF-SI-2025/EXBanka-3-Backend/auth-service/internal/service"
+	infrasvc "github.com/RAF-SI-2025/EXBanka-3-Backend/auth-service/internal/service"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
@@ -15,12 +14,12 @@ import (
 
 type AuthHandler struct {
 	authv1.UnimplementedAuthServiceServer
-	svc *service.AuthService
+	svc *authsvc.AuthService
 }
 
 func NewAuthHandler(cfg *config.Config, db *gorm.DB, notifSvc *infrasvc.NotificationService) *AuthHandler {
 	return &AuthHandler{
-		svc: service.NewAuthService(cfg, db, notifSvc),
+		svc: authsvc.NewAuthService(cfg, db, notifSvc),
 	}
 }
 

@@ -1,100 +1,60 @@
-# =========================
 # OS / Editor
-# =========================
 .DS_Store
 Thumbs.db
 
 .idea/
 .vscode/
+*.iml
 *.swp
 *.swo
 
-# =========================
 # Environment files
-# =========================
 .env
 .env.*
 !.env.example
 
-# =========================
 # Go build / cache
-# =========================
 .gocache/
+.cover/
+.tmp/
 bin/
 dist/
 build/
 tmp/
+temp/
 out/
 
 # Go test / coverage
 *.test
 *.out
+*.cover
 coverage.out
+coverage.txt
 coverage.html
 
 # Go workspace / local files
 go.work.sum
 
-# =========================
-# Vendor (ignore only if you do NOT commit vendor)
-# =========================
-vendor/
-
-# =========================
 # Logs
-# =========================
 *.log
 logs/
 *.pid
 
-# =========================
-# Generated files
-# =========================
+# Compiled binaries / generated executables
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
+*.a
 
-# =========================
 # Docker / local volumes
-# =========================
 postgres_data/
 pgdata/
 data/
 
-# =========================
 # Temporary files
-# =========================
 *.tmp
 *.temp
-tmp/
-temp/
-
-# =========================
-# JetBrains / VSCode project files
-# =========================
-*.iml
-
-# =========================
-# protobuf / buf generated files
-# Ignore only if generated files should NOT be committed
-# If your project requires generated proto files in git, comment these out
-# =========================
-# gen/
-# *.pb.go
-# *.pb.gw.go
-
-# =========================
-# Swagger / docs generated files
-# Ignore only if generated docs should NOT be committed
-# =========================
-# docs/
-# swagger.json
-# swagger.yaml
-
-# =========================
-# Misc
-# =========================
 *.bak
 *.orig

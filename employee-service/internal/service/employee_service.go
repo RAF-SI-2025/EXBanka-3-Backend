@@ -1,15 +1,15 @@
 package service
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"time"
 
-	"EXBanka/internal/config"
-	"EXBanka/internal/models"
-	"EXBanka/internal/repository"
-	infrasvc "EXBanka/internal/service"
-	"EXBanka/internal/util"
-
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/config"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/repository"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/util"
 	"gorm.io/gorm"
 )
 
@@ -18,10 +18,10 @@ type EmployeeService struct {
 	employeeRepo *repository.EmployeeRepository
 	permRepo     *repository.PermissionRepository
 	tokenRepo    *repository.TokenRepository
-	notifSvc     *infrasvc.NotificationService
+	notifSvc     *NotificationService
 }
 
-func NewEmployeeService(cfg *config.Config, db *gorm.DB, notifSvc *infrasvc.NotificationService) *EmployeeService {
+func NewEmployeeService(cfg *config.Config, db *gorm.DB, notifSvc *NotificationService) *EmployeeService {
 	return &EmployeeService{
 		cfg:          cfg,
 		employeeRepo: repository.NewEmployeeRepository(db),
@@ -42,6 +42,28 @@ type CreateEmployeeInput struct {
 	Username      string
 	Pozicija      string
 	Departman     string
+}
+
+type UpdateEmployeeInput struct {
+	Ime           string
+	Prezime       string
+	DatumRodjenja time.Time
+	Pol           string
+	Email         string
+	BrojTelefona  string
+	Adresa        string
+	Username      string
+	Pozicija      string
+	Departman     string
+	Aktivan       bool
+}
+
+func generateToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("failed to generate token: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func (s *EmployeeService) CreateEmployee(input CreateEmployeeInput) (*models.Employee, error) {
@@ -82,7 +104,7 @@ func (s *EmployeeService) CreateEmployee(input CreateEmployeeInput) (*models.Emp
 		Username:      input.Username,
 		Pozicija:      input.Pozicija,
 		Departman:     input.Departman,
-		Aktivan:       false, // inactive until account activation
+		Aktivan:       false,
 		Password:      "pending",
 		SaltPassword:  "pending",
 	}
@@ -107,7 +129,6 @@ func (s *EmployeeService) CreateEmployee(input CreateEmployeeInput) (*models.Emp
 	}
 
 	_ = s.notifSvc.SendActivationEmail(emp.Email, emp.Ime+" "+emp.Prezime, tokenStr)
-
 	return emp, nil
 }
 
@@ -117,20 +138,6 @@ func (s *EmployeeService) GetEmployee(id uint) (*models.Employee, error) {
 
 func (s *EmployeeService) ListEmployees(filter repository.EmployeeFilter) ([]models.Employee, int64, error) {
 	return s.employeeRepo.List(filter)
-}
-
-type UpdateEmployeeInput struct {
-	Ime           string
-	Prezime       string
-	DatumRodjenja time.Time
-	Pol           string
-	Email         string
-	BrojTelefona  string
-	Adresa        string
-	Username      string
-	Pozicija      string
-	Departman     string
-	Aktivan       bool
 }
 
 func (s *EmployeeService) UpdateEmployee(id uint, input UpdateEmployeeInput) (*models.Employee, error) {
@@ -200,6 +207,7 @@ func (s *EmployeeService) SetEmployeeActive(id uint, aktivan bool) error {
 	if !aktivan && emp.IsAdmin() {
 		return fmt.Errorf("cannot deactivate an admin employee")
 	}
+
 	return s.employeeRepo.UpdateFields(id, map[string]interface{}{"aktivan": aktivan})
 }
 
@@ -209,9 +217,12 @@ func (s *EmployeeService) UpdateEmployeePermissions(id uint, permissionNames []s
 		return nil, fmt.Errorf("employee not found")
 	}
 
-	perms, err := s.permRepo.FindByNames(permissionNames)
+	perms, err := s.permRepo.FindByNamesForSubject(permissionNames, models.PermissionSubjectEmployee)
 	if err != nil {
 		return nil, err
+	}
+	if len(perms) != len(permissionNames) {
+		return nil, fmt.Errorf("employees can only be assigned employee permissions")
 	}
 
 	if err := s.employeeRepo.SetPermissions(emp, perms); err != nil {
@@ -222,5 +233,5 @@ func (s *EmployeeService) UpdateEmployeePermissions(id uint, permissionNames []s
 }
 
 func (s *EmployeeService) GetAllPermissions() ([]models.Permission, error) {
-	return s.permRepo.FindAll()
+	return s.permRepo.FindAllBySubject(models.PermissionSubjectEmployee)
 }

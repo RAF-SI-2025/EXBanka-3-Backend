@@ -4,13 +4,11 @@ import (
 	"context"
 	"time"
 
-	"EXBanka/backend/internal/service"
-	employeev1 "EXBanka/gen/proto/employee/v1"
-	"EXBanka/internal/config"
-	"EXBanka/internal/models"
-	"EXBanka/internal/repository"
-	infrasvc "EXBanka/internal/service"
-
+	employeev1 "github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/gen/proto/employee/v1"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/config"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/repository"
+	svc "github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/service"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -19,12 +17,12 @@ import (
 
 type EmployeeHandler struct {
 	employeev1.UnimplementedEmployeeServiceServer
-	svc *service.EmployeeService
+	svc *svc.EmployeeService
 }
 
-func NewEmployeeHandler(cfg *config.Config, db *gorm.DB, notifSvc *infrasvc.NotificationService) *EmployeeHandler {
+func NewEmployeeHandler(cfg *config.Config, db *gorm.DB, notifSvc *svc.NotificationService) *EmployeeHandler {
 	return &EmployeeHandler{
-		svc: service.NewEmployeeService(cfg, db, notifSvc),
+		svc: svc.NewEmployeeService(cfg, db, notifSvc),
 	}
 }
 
@@ -37,6 +35,7 @@ func toEmployeeProto(emp *models.Employee) *employeev1.EmployeeProto {
 			Description: p.Description,
 		})
 	}
+
 	return &employeev1.EmployeeProto{
 		Id:            uint64(emp.ID),
 		Ime:           emp.Ime,
@@ -68,7 +67,7 @@ func toEmployeeListItem(emp *models.Employee) *employeev1.EmployeeListItem {
 }
 
 func (h *EmployeeHandler) CreateEmployee(ctx context.Context, req *employeev1.CreateEmployeeRequest) (*employeev1.CreateEmployeeResponse, error) {
-	emp, err := h.svc.CreateEmployee(service.CreateEmployeeInput{
+	emp, err := h.svc.CreateEmployee(svc.CreateEmployeeInput{
 		Ime:           req.Ime,
 		Prezime:       req.Prezime,
 		DatumRodjenja: time.Unix(req.DatumRodjenja, 0),
@@ -127,7 +126,7 @@ func (h *EmployeeHandler) ListEmployees(ctx context.Context, req *employeev1.Lis
 }
 
 func (h *EmployeeHandler) UpdateEmployee(ctx context.Context, req *employeev1.UpdateEmployeeRequest) (*employeev1.UpdateEmployeeResponse, error) {
-	emp, err := h.svc.UpdateEmployee(uint(req.Id), service.UpdateEmployeeInput{
+	emp, err := h.svc.UpdateEmployee(uint(req.Id), svc.UpdateEmployeeInput{
 		Ime:           req.Ime,
 		Prezime:       req.Prezime,
 		DatumRodjenja: time.Unix(req.DatumRodjenja, 0),

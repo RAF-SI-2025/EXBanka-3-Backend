@@ -7,12 +7,10 @@ import (
 	"fmt"
 	"time"
 
-	"EXBanka/internal/config"
-	"EXBanka/internal/models"
-	"EXBanka/internal/repository"
-	infrasvc "EXBanka/internal/service"
-	"EXBanka/internal/util"
-
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/auth-service/internal/config"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/auth-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/auth-service/internal/repository"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/auth-service/internal/util"
 	"gorm.io/gorm"
 )
 
@@ -20,10 +18,10 @@ type AuthService struct {
 	cfg          *config.Config
 	employeeRepo *repository.EmployeeRepository
 	tokenRepo    *repository.TokenRepository
-	notifSvc     *infrasvc.NotificationService
+	notifSvc     *NotificationService
 }
 
-func NewAuthService(cfg *config.Config, db *gorm.DB, notifSvc *infrasvc.NotificationService) *AuthService {
+func NewAuthService(cfg *config.Config, db *gorm.DB, notifSvc *NotificationService) *AuthService {
 	return &AuthService{
 		cfg:          cfg,
 		employeeRepo: repository.NewEmployeeRepository(db),
@@ -156,7 +154,6 @@ func (s *AuthService) ActivateAccount(tokenStr, password, passwordConfirm string
 func (s *AuthService) RequestPasswordReset(email string) error {
 	emp, err := s.employeeRepo.FindByEmail(email)
 	if err != nil {
-		// Do not reveal whether the email exists
 		return nil
 	}
 	if !emp.Aktivan {
