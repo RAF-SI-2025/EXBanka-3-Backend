@@ -90,17 +90,17 @@ func newTestClientService(clientRepo repository.ClientRepositoryInterface, permR
 	return service.NewClientServiceWithRepos(cfg, clientRepo, permRepo)
 }
 
-// validCreateInput returns a CreateClientInput with all fields valid.
-// Note: CreateClient uses ValidateBankEmail which requires @bank.com suffix.
+// validCreateClientInput returns a CreateClientInput with all fields valid.
+// Clients use regular (non-bank) email addresses.
 func validCreateClientInput() service.CreateClientInput {
 	return service.CreateClientInput{
-		Ime:          "Ana",
-		Prezime:      "Anic",
+		Ime:           "Ana",
+		Prezime:       "Anic",
 		DatumRodjenja: time.Date(1995, 3, 20, 0, 0, 0, 0, time.UTC).Unix(),
-		Pol:          "F",
-		Email:        "ana@bank.com",
-		BrojTelefona: "0651234567",
-		Adresa:       "Ulica 2",
+		Pol:           "F",
+		Email:         "ana@gmail.com",
+		BrojTelefona:  "0651234567",
+		Adresa:        "Ulica 2",
 	}
 }
 
@@ -222,6 +222,84 @@ func TestUpdateClient_DuplicateEmail(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "email already in use") {
 		t.Errorf("UpdateClient() error = %q, want contains %q", err.Error(), "email already in use")
+	}
+}
+
+func TestCreateClient_AcceptsNonBankEmail(t *testing.T) {
+	clientRepo := &mockClientRepo{
+		emailExistsFn: func(email string, excludeID uint) (bool, error) { return false, nil },
+		createFn:      func(client *models.Client) error { client.ID = 1; return nil },
+	}
+	svc := newTestClientService(clientRepo, &mockPermRepo{})
+
+	input := validCreateClientInput()
+	input.Email = "user@gmail.com" // regular non-bank email
+
+	got, err := svc.CreateClient(input)
+	if err != nil {
+		t.Fatalf("CreateClient() rejected non-bank email: %v", err)
+	}
+	if got == nil {
+		t.Fatal("CreateClient() returned nil client for valid non-bank email")
+	}
+}
+
+func TestUpdateClient_SameEmailAllowed(t *testing.T) {
+	existing := &models.Client{
+		ID:    10,
+		Email: "user@gmail.com",
+	}
+	clientRepo := &mockClientRepo{
+		findByIDFn: func(id uint) (*models.Client, error) { return existing, nil },
+		updateFn:   func(client *models.Client) error { return nil },
+		// EmailExists should NOT be called when email is unchanged
+		emailExistsFn: func(email string, excludeID uint) (bool, error) {
+			return true, nil // would reject if called
+		},
+	}
+	svc := newTestClientService(clientRepo, &mockPermRepo{})
+
+	input := service.UpdateClientInput{
+		Ime:           "Ana",
+		Prezime:       "Anic",
+		DatumRodjenja: time.Date(1995, 3, 20, 0, 0, 0, 0, time.UTC).Unix(),
+		Pol:           "F",
+		Email:         "user@gmail.com", // same as existing — should not trigger duplicate check
+		BrojTelefona:  "0651234567",
+		Adresa:        "Ulica 2",
+	}
+
+	_, err := svc.UpdateClient(10, input)
+	if err != nil {
+		t.Fatalf("UpdateClient() with same email unexpectedly returned error: %v", err)
+	}
+}
+
+func TestUpdateClient_AcceptsNonBankEmail(t *testing.T) {
+	existing := &models.Client{
+		ID:    11,
+		Email: "old@gmail.com",
+	}
+	clientRepo := &mockClientRepo{
+		findByIDFn:    func(id uint) (*models.Client, error) { return existing, nil },
+		emailExistsFn: func(email string, excludeID uint) (bool, error) { return false, nil },
+		updateFn:      func(client *models.Client) error { return nil },
+	}
+	svc := newTestClientService(clientRepo, &mockPermRepo{})
+
+	input := service.UpdateClientInput{
+		Ime:           "Ana",
+		Prezime:       "Anic",
+		DatumRodjenja: time.Date(1995, 3, 20, 0, 0, 0, 0, time.UTC).Unix(),
+		Pol:           "F",
+		Email:         "new@yahoo.com", // regular non-bank email
+		BrojTelefona:  "0651234567",
+		Adresa:        "Ulica 2",
+	}
+
+	_, err := svc.UpdateClient(11, input)
+	if err != nil {
+		t.Fatalf("UpdateClient() rejected non-bank email: %v", err)
 	}
 }
 

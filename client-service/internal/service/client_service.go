@@ -61,7 +61,7 @@ func (s *ClientService) CreateClient(input CreateClientInput) (*models.Client, e
 	if err := util.ValidatePhoneNumber(input.BrojTelefona); err != nil {
 		return nil, err
 	}
-	if err := util.ValidateBankEmail(input.Email); err != nil {
+	if err := util.ValidateEmail(input.Email); err != nil {
 		return nil, err
 	}
 	if err := util.ValidateDateOfBirth(time.Unix(input.DatumRodjenja, 0)); err != nil {
@@ -113,7 +113,7 @@ func (s *ClientService) UpdateClient(id uint, input UpdateClientInput) (*models.
 	if err := util.ValidatePhoneNumber(input.BrojTelefona); err != nil {
 		return nil, err
 	}
-	if err := util.ValidateBankEmail(input.Email); err != nil {
+	if err := util.ValidateEmail(input.Email); err != nil {
 		return nil, err
 	}
 	if err := util.ValidateDateOfBirth(time.Unix(input.DatumRodjenja, 0)); err != nil {
