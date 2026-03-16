@@ -1,0 +1,39 @@
+run:
+  timeout: 5m
+  skip-files:
+    - ".*\\.pb\\.go$"
+
+linters:
+  enable:
+    - govet          # checks correctness (shadowing, printf format, etc.)
+    - errcheck       # finds unchecked errors
+    - staticcheck    # broad static analysis
+    - unused         # finds unused code
+    - ineffassign    # assigns to variable never used after
+    - gosimple       # simplification suggestions
+    - gofmt          # formatting check (informational)
+    - goimports      # import grouping
+    - misspell       # spelling errors in comments/strings
+  disable:
+    - godot          # no requirement for period at end of comments
+    - exhaustruct    # too strict for existing code
+    - wsl            # too strict formatting
+
+linters-settings:
+  govet:
+    check-shadowing: true
+  errcheck:
+    check-test-functions: false  # don't check error returns in test helpers
+  gofmt:
+    simplify: true
+
+issues:
+  exclude-rules:
+    - path: "_test\\.go"
+      linters:
+        - errcheck  # test helpers often ignore errors intentionally
+    - path: ".*\\.pb\\.go$"
+      linters:
+        - all
+  max-issues-per-linter: 50
+  max-same-issues: 5
