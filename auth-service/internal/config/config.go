@@ -1,7 +1,7 @@
 package config
 
 import (
-	"log"
+	"log/slog"
 	"os"
 	"strconv"
 
@@ -61,8 +61,13 @@ func Load() *Config {
 		FrontendURL:  getEnv("FRONTEND_URL", "http://localhost:5173"),
 	}
 
-	log.Printf("Auth config loaded: DB=%s:%s/%s | HTTP=:%s | gRPC=:%s",
-		cfg.DBHost, cfg.DBPort, cfg.DBName, cfg.HTTPPort, cfg.GRPCPort)
+	slog.Info("Auth config loaded",
+		"db_host", cfg.DBHost,
+		"db_port", cfg.DBPort,
+		"db_name", cfg.DBName,
+		"http_port", cfg.HTTPPort,
+		"grpc_port", cfg.GRPCPort,
+	)
 
 	return cfg
 }

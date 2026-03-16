@@ -2,7 +2,7 @@ package service
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/config"
 	"gopkg.in/gomail.v2"
@@ -71,10 +71,10 @@ func (s *NotificationService) sendEmail(to, subject, htmlBody string) error {
 	d := gomail.NewDialer(s.cfg.SMTPHost, s.cfg.SMTPPort, s.cfg.SMTPUser, s.cfg.SMTPPassword)
 
 	if err := d.DialAndSend(m); err != nil {
-		log.Printf("[SMTP] Failed to send %q to %s: %v", subject, to, err)
+		slog.Error("SMTP failed to send email", "subject", subject, "to", to, "error", err)
 		return fmt.Errorf("failed to send email: %w", err)
 	}
 
-	log.Printf("[SMTP] Sent %q to %s", subject, to)
+	slog.Info("SMTP email sent", "subject", subject, "to", to)
 	return nil
 }

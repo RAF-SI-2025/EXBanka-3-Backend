@@ -22,6 +22,8 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+
 	cfg := config.Load()
 	cfg.GRPCPort = envOrDefault("CLIENT_GRPC_PORT", "9093")
 	cfg.HTTPPort = envOrDefault("CLIENT_HTTP_PORT", "8083")

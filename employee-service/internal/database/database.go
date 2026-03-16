@@ -2,7 +2,7 @@ package database
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/config"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/models"
@@ -24,12 +24,12 @@ func Connect(cfg *config.Config) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to connect to PostgreSQL: %w", err)
 	}
 
-	log.Printf("Connected to PostgreSQL at %s:%s/%s", cfg.DBHost, cfg.DBPort, cfg.DBName)
+	slog.Info("Connected to PostgreSQL", "host", cfg.DBHost, "port", cfg.DBPort, "db", cfg.DBName)
 	return db, nil
 }
 
 func Migrate(db *gorm.DB) error {
-	log.Println("Running employee-service database migrations...")
+	slog.Info("Running employee-service database migrations...")
 	if err := db.AutoMigrate(
 		&models.Employee{},
 		&models.Permission{},
@@ -38,7 +38,7 @@ func Migrate(db *gorm.DB) error {
 		return fmt.Errorf("migration failed: %w", err)
 	}
 
-	log.Println("Employee-service migrations complete")
+	slog.Info("Employee-service migrations complete")
 	return nil
 }
 
@@ -60,6 +60,6 @@ func SeedPermissions(db *gorm.DB) error {
 		}
 	}
 
-	log.Println("Permissions seeded")
+	slog.Info("Permissions seeded")
 	return nil
 }

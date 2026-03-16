@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -25,9 +25,10 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("Backend shared runtime listening on :%s", httpPort)
+		slog.Info("Backend shared runtime listening", "port", httpPort)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("HTTP server error: %v", err)
+			slog.Error("HTTP server error", "error", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -35,11 +36,11 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Shutting down gracefully...")
+	slog.Info("Shutting down gracefully...")
 	if err := httpServer.Close(); err != nil {
-		log.Printf("HTTP shutdown error: %v", err)
+		slog.Error("HTTP shutdown error", "error", err)
 	}
-	log.Println("Server stopped")
+	slog.Info("Server stopped")
 }
 
 func healthCheck(w http.ResponseWriter, r *http.Request) {
