@@ -13,15 +13,28 @@ import (
 	"gorm.io/gorm"
 )
 
+// ClientServiceInterface allows handler tests to inject a mock service.
+type ClientServiceInterface interface {
+	CreateClient(input svc.CreateClientInput) (*models.Client, error)
+	GetClient(id uint) (*models.Client, error)
+	ListClients(filter repository.ClientFilter) ([]models.Client, int64, error)
+	UpdateClient(id uint, input svc.UpdateClientInput) (*models.Client, error)
+	UpdateClientPermissions(id uint, permissionNames []string) (*models.Client, error)
+}
+
 type ClientHandler struct {
 	clientv1.UnimplementedClientServiceServer
-	svc *svc.ClientService
+	svc ClientServiceInterface
 }
 
 func NewClientHandler(cfg *config.Config, db *gorm.DB) *ClientHandler {
 	return &ClientHandler{
 		svc: svc.NewClientService(cfg, db),
 	}
+}
+
+func NewClientHandlerWithService(s ClientServiceInterface) *ClientHandler {
+	return &ClientHandler{svc: s}
 }
 
 func toClientProto(client *models.Client) *clientv1.ClientProto {
