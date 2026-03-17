@@ -51,6 +51,14 @@ func NewTransferServiceWithRepos(
 	}
 }
 
+func (s *TransferService) ListTransfersByAccount(accountID uint, filter models.TransferFilter) ([]models.Transfer, int64, error) {
+	return s.transferRepo.ListByAccountID(accountID, filter)
+}
+
+func (s *TransferService) ListTransfersByClient(clientID uint, filter models.TransferFilter) ([]models.Transfer, int64, error) {
+	return s.transferRepo.ListByClientID(clientID, filter)
+}
+
 func (s *TransferService) CreateTransfer(input CreateTransferInput) (*models.Transfer, error) {
 	if input.Iznos <= 0 {
 		return nil, fmt.Errorf("transfer amount must be positive")

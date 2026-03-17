@@ -34,7 +34,13 @@ func (m *mockAccountRepo) UpdateFields(id uint, fields map[string]interface{}) e
 }
 
 type mockTransferRepo struct {
-	created *models.Transfer
+	created              *models.Transfer
+	listByAccountResult  []models.Transfer
+	listByAccountTotal   int64
+	listByClientResult   []models.Transfer
+	listByClientTotal    int64
+	capturedAccountFilter models.TransferFilter
+	capturedClientFilter  models.TransferFilter
 }
 
 func (m *mockTransferRepo) Create(t *models.Transfer) error {
@@ -42,11 +48,13 @@ func (m *mockTransferRepo) Create(t *models.Transfer) error {
 	return nil
 }
 func (m *mockTransferRepo) FindByID(_ uint) (*models.Transfer, error) { return nil, nil }
-func (m *mockTransferRepo) ListByAccountID(_ uint, _ models.TransferFilter) ([]models.Transfer, int64, error) {
-	return nil, 0, nil
+func (m *mockTransferRepo) ListByAccountID(_ uint, filter models.TransferFilter) ([]models.Transfer, int64, error) {
+	m.capturedAccountFilter = filter
+	return m.listByAccountResult, m.listByAccountTotal, nil
 }
-func (m *mockTransferRepo) ListByClientID(_ uint, _ models.TransferFilter) ([]models.Transfer, int64, error) {
-	return nil, 0, nil
+func (m *mockTransferRepo) ListByClientID(_ uint, filter models.TransferFilter) ([]models.Transfer, int64, error) {
+	m.capturedClientFilter = filter
+	return m.listByClientResult, m.listByClientTotal, nil
 }
 
 type mockExchangeRateService struct {
@@ -187,5 +195,75 @@ func TestCreateTransfer_DailyLimitExceeded_ReturnsError(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected daily limit error, got nil")
+	}
+}
+
+// --- ListTransfersByAccount tests ---
+
+func TestListTransfersByAccount_ReturnsTransfers(t *testing.T) {
+	transfers := []models.Transfer{{ID: 1}, {ID: 2}}
+	transferRepo := &mockTransferRepo{listByAccountResult: transfers, listByAccountTotal: 2}
+	svc := service.NewTransferServiceWithRepos(&mockAccountRepo{accounts: map[uint]*models.Account{}}, transferRepo, &mockExchangeRateService{})
+
+	result, total, err := svc.ListTransfersByAccount(5, models.TransferFilter{Page: 1, PageSize: 10})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 2 {
+		t.Errorf("expected 2 transfers, got %d", len(result))
+	}
+	if total != 2 {
+		t.Errorf("expected total=2, got %d", total)
+	}
+}
+
+func TestListTransfersByAccount_FilterPassedThrough(t *testing.T) {
+	transferRepo := &mockTransferRepo{}
+	svc := service.NewTransferServiceWithRepos(&mockAccountRepo{accounts: map[uint]*models.Account{}}, transferRepo, &mockExchangeRateService{})
+
+	_, _, err := svc.ListTransfersByAccount(5, models.TransferFilter{Status: "uspesno", Page: 2, PageSize: 5})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if transferRepo.capturedAccountFilter.Status != "uspesno" {
+		t.Errorf("expected Status filter=uspesno, got %q", transferRepo.capturedAccountFilter.Status)
+	}
+	if transferRepo.capturedAccountFilter.Page != 2 {
+		t.Errorf("expected Page=2, got %d", transferRepo.capturedAccountFilter.Page)
+	}
+}
+
+// --- ListTransfersByClient tests ---
+
+func TestListTransfersByClient_ReturnsTransfers(t *testing.T) {
+	transfers := []models.Transfer{{ID: 10}, {ID: 11}, {ID: 12}}
+	transferRepo := &mockTransferRepo{listByClientResult: transfers, listByClientTotal: 3}
+	svc := service.NewTransferServiceWithRepos(&mockAccountRepo{accounts: map[uint]*models.Account{}}, transferRepo, &mockExchangeRateService{})
+
+	result, total, err := svc.ListTransfersByClient(7, models.TransferFilter{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 3 {
+		t.Errorf("expected 3 transfers, got %d", len(result))
+	}
+	if total != 3 {
+		t.Errorf("expected total=3, got %d", total)
+	}
+}
+
+func TestListTransfersByClient_PaginationPassedThrough(t *testing.T) {
+	transferRepo := &mockTransferRepo{}
+	svc := service.NewTransferServiceWithRepos(&mockAccountRepo{accounts: map[uint]*models.Account{}}, transferRepo, &mockExchangeRateService{})
+
+	_, _, err := svc.ListTransfersByClient(7, models.TransferFilter{Page: 3, PageSize: 20})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if transferRepo.capturedClientFilter.Page != 3 {
+		t.Errorf("expected Page=3, got %d", transferRepo.capturedClientFilter.Page)
+	}
+	if transferRepo.capturedClientFilter.PageSize != 20 {
+		t.Errorf("expected PageSize=20, got %d", transferRepo.capturedClientFilter.PageSize)
 	}
 }
