@@ -142,3 +142,19 @@ func (s *PaymentService) VerifyPayment(paymentID uint, verificationCode string) 
 
 	return payment, nil
 }
+
+func (s *PaymentService) GetPayment(id uint) (*models.Payment, error) {
+	payment, err := s.paymentRepo.FindByID(id)
+	if err != nil {
+		return nil, fmt.Errorf("payment not found: %w", err)
+	}
+	return payment, nil
+}
+
+func (s *PaymentService) ListPaymentsByAccount(accountID uint, filter models.PaymentFilter) ([]models.Payment, int64, error) {
+	return s.paymentRepo.ListByAccountID(accountID, filter)
+}
+
+func (s *PaymentService) ListPaymentsByClient(clientID uint, filter models.PaymentFilter) ([]models.Payment, int64, error) {
+	return s.paymentRepo.ListByClientID(clientID, filter)
+}
