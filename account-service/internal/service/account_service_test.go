@@ -12,13 +12,16 @@ import (
 // --- mocks ---
 
 type mockAccountRepo struct {
-	created          *models.Account
-	err              error
-	findByIDResult   *models.Account
-	findByIDErr      error
+	created            *models.Account
+	err                error
+	findByIDResult     *models.Account
+	findByIDErr        error
 	listByClientResult []models.Account
-	updatedID        uint
-	updatedFields    map[string]interface{}
+	listAllResult      []models.Account
+	listAllTotal       int64
+	capturedFilter     models.AccountFilter
+	updatedID          uint
+	updatedFields      map[string]interface{}
 }
 
 func (m *mockAccountRepo) Create(a *models.Account) error {
@@ -37,8 +40,9 @@ func (m *mockAccountRepo) FindByBrojRacuna(_ string) (*models.Account, error) {
 func (m *mockAccountRepo) ListByClientID(_ uint) ([]models.Account, error) {
 	return m.listByClientResult, nil
 }
-func (m *mockAccountRepo) ListAll(_ models.AccountFilter) ([]models.Account, int64, error) {
-	return nil, 0, nil
+func (m *mockAccountRepo) ListAll(filter models.AccountFilter) ([]models.Account, int64, error) {
+	m.capturedFilter = filter
+	return m.listAllResult, m.listAllTotal, nil
 }
 func (m *mockAccountRepo) UpdateFields(id uint, fields map[string]interface{}) error {
 	if m.err != nil {
@@ -271,5 +275,80 @@ func TestUpdateAccountLimits_RejectsNegativeMesecniLimit(t *testing.T) {
 	err := svc.UpdateAccountLimits(4, 50000, -1)
 	if err == nil {
 		t.Fatal("expected error for negative mesecni limit, got nil")
+	}
+}
+
+// --- ListAllAccounts tests ---
+
+func TestListAllAccounts_ReturnsPaginatedResults(t *testing.T) {
+	accounts := []models.Account{{ID: 1}, {ID: 2}, {ID: 3}}
+	repo := &mockAccountRepo{listAllResult: accounts, listAllTotal: 3}
+	svc := service.NewAccountServiceWithRepos(repo, &mockCurrencyRepo{})
+
+	result, total, err := svc.ListAllAccounts(models.AccountFilter{Page: 1, PageSize: 10})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 3 {
+		t.Errorf("expected 3 accounts, got %d", len(result))
+	}
+	if total != 3 {
+		t.Errorf("expected total=3, got %d", total)
+	}
+}
+
+func TestListAllAccounts_FilterByTip(t *testing.T) {
+	repo := &mockAccountRepo{listAllResult: []models.Account{{ID: 1, Tip: "tekuci"}}, listAllTotal: 1}
+	svc := service.NewAccountServiceWithRepos(repo, &mockCurrencyRepo{})
+
+	_, _, err := svc.ListAllAccounts(models.AccountFilter{Tip: "tekuci"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.capturedFilter.Tip != "tekuci" {
+		t.Errorf("expected filter Tip=tekuci, got %q", repo.capturedFilter.Tip)
+	}
+}
+
+func TestListAllAccounts_FilterByStatus(t *testing.T) {
+	repo := &mockAccountRepo{listAllResult: []models.Account{{ID: 1, Status: "aktivan"}}, listAllTotal: 1}
+	svc := service.NewAccountServiceWithRepos(repo, &mockCurrencyRepo{})
+
+	_, _, err := svc.ListAllAccounts(models.AccountFilter{Status: "aktivan"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.capturedFilter.Status != "aktivan" {
+		t.Errorf("expected filter Status=aktivan, got %q", repo.capturedFilter.Status)
+	}
+}
+
+func TestListAllAccounts_FilterByCurrency(t *testing.T) {
+	currID := uint(2)
+	repo := &mockAccountRepo{listAllResult: []models.Account{{ID: 1, CurrencyID: 2}}, listAllTotal: 1}
+	svc := service.NewAccountServiceWithRepos(repo, &mockCurrencyRepo{})
+
+	_, _, err := svc.ListAllAccounts(models.AccountFilter{CurrencyID: &currID})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.capturedFilter.CurrencyID == nil || *repo.capturedFilter.CurrencyID != 2 {
+		t.Errorf("expected filter CurrencyID=2, got %v", repo.capturedFilter.CurrencyID)
+	}
+}
+
+func TestListAllAccounts_PaginationPassedThrough(t *testing.T) {
+	repo := &mockAccountRepo{listAllResult: []models.Account{}, listAllTotal: 0}
+	svc := service.NewAccountServiceWithRepos(repo, &mockCurrencyRepo{})
+
+	_, _, err := svc.ListAllAccounts(models.AccountFilter{Page: 3, PageSize: 20})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.capturedFilter.Page != 3 {
+		t.Errorf("expected Page=3, got %d", repo.capturedFilter.Page)
+	}
+	if repo.capturedFilter.PageSize != 20 {
+		t.Errorf("expected PageSize=20, got %d", repo.capturedFilter.PageSize)
 	}
 }

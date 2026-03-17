@@ -86,6 +86,10 @@ func (s *AccountService) CreateAccount(input CreateAccountInput) (*models.Accoun
 	return account, nil
 }
 
+func (s *AccountService) ListAllAccounts(filter models.AccountFilter) ([]models.Account, int64, error) {
+	return s.accountRepo.ListAll(filter)
+}
+
 func (s *AccountService) GetAccount(id uint) (*models.Account, error) {
 	return s.accountRepo.FindByID(id)
 }
