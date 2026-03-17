@@ -1,6 +1,7 @@
 package service_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/models"
@@ -11,8 +12,13 @@ import (
 // --- mocks ---
 
 type mockAccountRepo struct {
-	created *models.Account
-	err     error
+	created          *models.Account
+	err              error
+	findByIDResult   *models.Account
+	findByIDErr      error
+	listByClientResult []models.Account
+	updatedID        uint
+	updatedFields    map[string]interface{}
 }
 
 func (m *mockAccountRepo) Create(a *models.Account) error {
@@ -22,15 +28,26 @@ func (m *mockAccountRepo) Create(a *models.Account) error {
 	m.created = a
 	return nil
 }
-func (m *mockAccountRepo) FindByID(_ uint) (*models.Account, error) { return nil, nil }
+func (m *mockAccountRepo) FindByID(_ uint) (*models.Account, error) {
+	return m.findByIDResult, m.findByIDErr
+}
 func (m *mockAccountRepo) FindByBrojRacuna(_ string) (*models.Account, error) {
 	return nil, nil
 }
-func (m *mockAccountRepo) ListByClientID(_ uint) ([]models.Account, error) { return nil, nil }
+func (m *mockAccountRepo) ListByClientID(_ uint) ([]models.Account, error) {
+	return m.listByClientResult, nil
+}
 func (m *mockAccountRepo) ListAll(_ models.AccountFilter) ([]models.Account, int64, error) {
 	return nil, 0, nil
 }
-func (m *mockAccountRepo) UpdateFields(_ uint, _ map[string]interface{}) error { return nil }
+func (m *mockAccountRepo) UpdateFields(id uint, fields map[string]interface{}) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.updatedID = id
+	m.updatedFields = fields
+	return nil
+}
 
 type mockCurrencyRepo struct {
 	currency *models.Currency
@@ -45,7 +62,7 @@ func (m *mockCurrencyRepo) FindAll() ([]models.Currency, error)          { retur
 
 func ptr(u uint) *uint { return &u }
 
-// --- tests ---
+// --- CreateAccount tests ---
 
 func TestCreateAccount_TekuciLicni_Success(t *testing.T) {
 	svc := service.NewAccountServiceWithRepos(&mockAccountRepo{}, &mockCurrencyRepo{})
@@ -152,5 +169,107 @@ func TestCreateAccount_SetsDefaultLimits(t *testing.T) {
 	}
 	if acc.Status != "aktivan" {
 		t.Errorf("expected Status=aktivan, got %s", acc.Status)
+	}
+}
+
+// --- GetAccount tests ---
+
+func TestGetAccount_ReturnsAccount(t *testing.T) {
+	expected := &models.Account{ID: 7, BrojRacuna: "000123456789012345", Naziv: "Moj račun"}
+	repo := &mockAccountRepo{findByIDResult: expected}
+	svc := service.NewAccountServiceWithRepos(repo, &mockCurrencyRepo{})
+
+	acc, err := svc.GetAccount(7)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if acc == nil || acc.ID != 7 {
+		t.Errorf("expected account with ID=7, got %v", acc)
+	}
+}
+
+func TestGetAccount_InvalidID_ReturnsError(t *testing.T) {
+	repo := &mockAccountRepo{findByIDErr: errors.New("record not found")}
+	svc := service.NewAccountServiceWithRepos(repo, &mockCurrencyRepo{})
+
+	_, err := svc.GetAccount(999)
+	if err == nil {
+		t.Fatal("expected error for invalid ID, got nil")
+	}
+}
+
+// --- ListAccountsByClient tests ---
+
+func TestListAccountsByClient_ReturnsClientAccounts(t *testing.T) {
+	accounts := []models.Account{
+		{ID: 1, ClientID: ptr(5)},
+		{ID: 2, ClientID: ptr(5)},
+	}
+	repo := &mockAccountRepo{listByClientResult: accounts}
+	svc := service.NewAccountServiceWithRepos(repo, &mockCurrencyRepo{})
+
+	result, err := svc.ListAccountsByClient(5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 2 {
+		t.Errorf("expected 2 accounts, got %d", len(result))
+	}
+}
+
+// --- UpdateAccountName tests ---
+
+func TestUpdateAccountName_ChangesName(t *testing.T) {
+	repo := &mockAccountRepo{}
+	svc := service.NewAccountServiceWithRepos(repo, &mockCurrencyRepo{})
+
+	err := svc.UpdateAccountName(3, "Novi naziv")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.updatedID != 3 {
+		t.Errorf("expected UpdateFields called with id=3, got %d", repo.updatedID)
+	}
+	if repo.updatedFields["naziv"] != "Novi naziv" {
+		t.Errorf("expected naziv='Novi naziv', got %v", repo.updatedFields["naziv"])
+	}
+}
+
+// --- UpdateAccountLimits tests ---
+
+func TestUpdateAccountLimits_ValidPositiveAmounts(t *testing.T) {
+	repo := &mockAccountRepo{}
+	svc := service.NewAccountServiceWithRepos(repo, &mockCurrencyRepo{})
+
+	err := svc.UpdateAccountLimits(4, 50000, 500000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.updatedID != 4 {
+		t.Errorf("expected UpdateFields called with id=4, got %d", repo.updatedID)
+	}
+	if repo.updatedFields["dnevni_limit"] != float64(50000) {
+		t.Errorf("expected dnevni_limit=50000, got %v", repo.updatedFields["dnevni_limit"])
+	}
+	if repo.updatedFields["mesecni_limit"] != float64(500000) {
+		t.Errorf("expected mesecni_limit=500000, got %v", repo.updatedFields["mesecni_limit"])
+	}
+}
+
+func TestUpdateAccountLimits_RejectsNegativeDnevniLimit(t *testing.T) {
+	svc := service.NewAccountServiceWithRepos(&mockAccountRepo{}, &mockCurrencyRepo{})
+
+	err := svc.UpdateAccountLimits(4, -1, 500000)
+	if err == nil {
+		t.Fatal("expected error for negative dnevni limit, got nil")
+	}
+}
+
+func TestUpdateAccountLimits_RejectsNegativeMesecniLimit(t *testing.T) {
+	svc := service.NewAccountServiceWithRepos(&mockAccountRepo{}, &mockCurrencyRepo{})
+
+	err := svc.UpdateAccountLimits(4, 50000, -1)
+	if err == nil {
+		t.Fatal("expected error for negative mesecni limit, got nil")
 	}
 }

@@ -85,3 +85,28 @@ func (s *AccountService) CreateAccount(input CreateAccountInput) (*models.Accoun
 	}
 	return account, nil
 }
+
+func (s *AccountService) GetAccount(id uint) (*models.Account, error) {
+	return s.accountRepo.FindByID(id)
+}
+
+func (s *AccountService) ListAccountsByClient(clientID uint) ([]models.Account, error) {
+	return s.accountRepo.ListByClientID(clientID)
+}
+
+func (s *AccountService) UpdateAccountName(id uint, naziv string) error {
+	return s.accountRepo.UpdateFields(id, map[string]interface{}{"naziv": naziv})
+}
+
+func (s *AccountService) UpdateAccountLimits(id uint, dnevniLimit, mesecniLimit float64) error {
+	if dnevniLimit < 0 {
+		return fmt.Errorf("dnevni limit cannot be negative")
+	}
+	if mesecniLimit < 0 {
+		return fmt.Errorf("mesecni limit cannot be negative")
+	}
+	return s.accountRepo.UpdateFields(id, map[string]interface{}{
+		"dnevni_limit":  dnevniLimit,
+		"mesecni_limit": mesecniLimit,
+	})
+}
