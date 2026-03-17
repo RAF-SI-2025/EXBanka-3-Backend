@@ -16,6 +16,11 @@ type TokenRepositoryInterface interface {
 	InvalidateEmployeeTokens(employeeID uint, tokenType string) error
 }
 
+// ClientRepositoryInterface defines the methods used by AuthService for client authentication.
+type ClientRepositoryInterface interface {
+	FindByEmail(email string) (*models.Client, error)
+}
+
 // Compile-time checks: ensure concrete repositories satisfy their interfaces.
 var _ EmployeeRepositoryInterface = (*EmployeeRepository)(nil)
 var _ TokenRepositoryInterface = (*TokenRepository)(nil)

@@ -69,24 +69,37 @@ func (m *mockTokenRepo) InvalidateEmployeeTokens(employeeID uint, tokenType stri
 	return nil
 }
 
+// ---- mock client repository ----
+
+type mockClientRepo struct {
+	findByEmailFn func(email string) (*models.Client, error)
+}
+
+func (m *mockClientRepo) FindByEmail(email string) (*models.Client, error) {
+	if m.findByEmailFn != nil {
+		return m.findByEmailFn(email)
+	}
+	return nil, errors.New("not implemented")
+}
+
 // ---- compile-time interface checks ----
 
 var _ repository.EmployeeRepositoryInterface = (*mockEmployeeRepo)(nil)
 var _ repository.TokenRepositoryInterface = (*mockTokenRepo)(nil)
+var _ repository.ClientRepositoryInterface = (*mockClientRepo)(nil)
 
 // ---- test helper ----
 
 // newTestAuthService creates an AuthService for unit testing.
 // notifSvc is nil — safe because unit tests only exercise paths that return
 // before the notification call (password mismatch, policy failure, etc.).
-// Tests that reach SendConfirmationEmail/SendResetPasswordEmail need a real notifSvc.
 func newTestAuthService(empRepo repository.EmployeeRepositoryInterface, tokRepo repository.TokenRepositoryInterface) *service.AuthService {
 	cfg := &config.Config{
 		JWTSecret:          "test-secret",
 		JWTAccessDuration:  15,
 		JWTRefreshDuration: 24 * 60,
 	}
-	return service.NewAuthServiceWithRepos(cfg, empRepo, tokRepo, nil)
+	return service.NewAuthServiceWithRepos(cfg, empRepo, &mockClientRepo{}, tokRepo, nil)
 }
 
 // ---- tests ----
@@ -241,6 +254,146 @@ func TestActivateAccount_InvalidPasswordPolicy(t *testing.T) {
 	err := svc.ActivateAccount("sometoken", "weak", "weak")
 	if err == nil {
 		t.Fatal("ActivateAccount() expected error for weak password, got nil")
+	}
+}
+
+// ---- ClientLogin tests ----
+
+func newTestAuthServiceWithClient(empRepo repository.EmployeeRepositoryInterface, clientRepo repository.ClientRepositoryInterface, tokRepo repository.TokenRepositoryInterface) *service.AuthService {
+	cfg := &config.Config{
+		JWTSecret:          "test-secret",
+		JWTAccessDuration:  15,
+		JWTRefreshDuration: 24 * 60,
+	}
+	return service.NewAuthServiceWithRepos(cfg, empRepo, clientRepo, tokRepo, nil)
+}
+
+func TestClientLogin_Success(t *testing.T) {
+	salt, _ := util.GenerateSalt()
+	hash, _ := util.HashPassword("ClientPass12", salt)
+
+	client := &models.Client{
+		ID:           10,
+		Email:        "user@gmail.com",
+		Password:     hash,
+		SaltPassword: salt,
+		Permissions:  []models.Permission{},
+	}
+
+	svc := newTestAuthServiceWithClient(
+		&mockEmployeeRepo{},
+		&mockClientRepo{findByEmailFn: func(email string) (*models.Client, error) { return client, nil }},
+		&mockTokenRepo{},
+	)
+
+	access, refresh, gotClient, err := svc.ClientLogin("user@gmail.com", "ClientPass12")
+	if err != nil {
+		t.Fatalf("ClientLogin() unexpected error: %v", err)
+	}
+	if access == "" {
+		t.Error("ClientLogin() returned empty access token")
+	}
+	if refresh == "" {
+		t.Error("ClientLogin() returned empty refresh token")
+	}
+	if gotClient == nil || gotClient.ID != 10 {
+		t.Error("ClientLogin() returned wrong client")
+	}
+}
+
+func TestClientLogin_WrongPassword(t *testing.T) {
+	salt, _ := util.GenerateSalt()
+	hash, _ := util.HashPassword("CorrectPass12", salt)
+
+	client := &models.Client{
+		ID:           11,
+		Email:        "user@gmail.com",
+		Password:     hash,
+		SaltPassword: salt,
+	}
+
+	svc := newTestAuthServiceWithClient(
+		&mockEmployeeRepo{},
+		&mockClientRepo{findByEmailFn: func(email string) (*models.Client, error) { return client, nil }},
+		&mockTokenRepo{},
+	)
+
+	_, _, _, err := svc.ClientLogin("user@gmail.com", "WrongPass99")
+	if err == nil {
+		t.Fatal("ClientLogin() expected error for wrong password, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid credentials") {
+		t.Errorf("ClientLogin() error = %q, want contains %q", err.Error(), "invalid credentials")
+	}
+}
+
+func TestClientLogin_NonExistentEmail(t *testing.T) {
+	svc := newTestAuthServiceWithClient(
+		&mockEmployeeRepo{},
+		&mockClientRepo{findByEmailFn: func(email string) (*models.Client, error) {
+			return nil, gorm.ErrRecordNotFound
+		}},
+		&mockTokenRepo{},
+	)
+
+	_, _, _, err := svc.ClientLogin("nobody@gmail.com", "AnyPass12")
+	if err == nil {
+		t.Fatal("ClientLogin() expected error for non-existent email, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid credentials") {
+		t.Errorf("ClientLogin() error = %q, want contains %q", err.Error(), "invalid credentials")
+	}
+}
+
+func TestClientLogin_JWTContainsClientID(t *testing.T) {
+	salt, _ := util.GenerateSalt()
+	hash, _ := util.HashPassword("ClientPass12", salt)
+
+	client := &models.Client{ID: 42, Email: "user@gmail.com", Password: hash, SaltPassword: salt, Permissions: []models.Permission{}}
+
+	svc := newTestAuthServiceWithClient(
+		&mockEmployeeRepo{},
+		&mockClientRepo{findByEmailFn: func(email string) (*models.Client, error) { return client, nil }},
+		&mockTokenRepo{},
+	)
+
+	access, _, _, err := svc.ClientLogin("user@gmail.com", "ClientPass12")
+	if err != nil {
+		t.Fatalf("ClientLogin() unexpected error: %v", err)
+	}
+
+	claims, err := util.ParseToken(access, "test-secret")
+	if err != nil {
+		t.Fatalf("ParseToken() error: %v", err)
+	}
+	if claims.ClientID != 42 {
+		t.Errorf("JWT ClientID = %d, want 42", claims.ClientID)
+	}
+}
+
+func TestClientLogin_JWTTokenSourceIsClient(t *testing.T) {
+	salt, _ := util.GenerateSalt()
+	hash, _ := util.HashPassword("ClientPass12", salt)
+
+	client := &models.Client{ID: 7, Email: "user@gmail.com", Password: hash, SaltPassword: salt, Permissions: []models.Permission{}}
+
+	svc := newTestAuthServiceWithClient(
+		&mockEmployeeRepo{},
+		&mockClientRepo{findByEmailFn: func(email string) (*models.Client, error) { return client, nil }},
+		&mockTokenRepo{},
+	)
+
+	access, _, _, err := svc.ClientLogin("user@gmail.com", "ClientPass12")
+	if err != nil {
+		t.Fatalf("ClientLogin() unexpected error: %v", err)
+	}
+
+	claims, err := util.ParseToken(access, "test-secret")
+	if err != nil {
+		t.Fatalf("ParseToken() error: %v", err)
+	}
+	if claims.TokenSource != "client" {
+		t.Errorf("JWT TokenSource = %q, want %q", claims.TokenSource, "client")
 	}
 }
 
