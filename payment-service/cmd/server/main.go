@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	paymentv1 "github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/gen/proto/payment/v1"
 	prv1 "github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/gen/proto/payment_recipient/v1"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/internal/config"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/internal/database"
@@ -37,6 +38,7 @@ func main() {
 	}
 
 	recipientH := handler.NewPaymentRecipientHandler(db)
+	paymentH := handler.NewPaymentHandler(db)
 
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
@@ -46,6 +48,7 @@ func main() {
 	)
 
 	prv1.RegisterPaymentRecipientServiceServer(grpcServer, recipientH)
+	paymentv1.RegisterPaymentServiceServer(grpcServer, paymentH)
 	reflection.Register(grpcServer)
 
 	grpcLis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
@@ -68,6 +71,10 @@ func main() {
 	grpcEndpoint := "localhost:" + cfg.GRPCPort
 
 	if err := prv1.RegisterPaymentRecipientServiceHandlerFromEndpoint(ctx, gwMux, grpcEndpoint, dialOpts); err != nil {
+		slog.Error("Failed to register recipient HTTP gateway", "error", err)
+		os.Exit(1)
+	}
+	if err := paymentv1.RegisterPaymentServiceHandlerFromEndpoint(ctx, gwMux, grpcEndpoint, dialOpts); err != nil {
 		slog.Error("Failed to register payment HTTP gateway", "error", err)
 		os.Exit(1)
 	}
