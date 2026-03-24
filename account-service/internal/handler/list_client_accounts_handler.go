@@ -50,6 +50,7 @@ type clientAccountJSON struct {
 	DnevnaPotrosnja   float64    `json:"dnevnaPotrosnja"`
 	MesecnaPotrosnja  float64    `json:"mesecnaPotrosnja"`
 	DatumIsteka       *time.Time `json:"datumIsteka"`
+	OdrzavanjeRacuna  float64    `json:"odrzavanjeRacuna"`
 	Naziv             string     `json:"naziv"`
 	Status            string     `json:"status"`
 }
@@ -85,6 +86,7 @@ func (h *ListClientAccountsHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http
 			DnevnaPotrosnja:   a.DnevnaPotrosnja,
 			MesecnaPotrosnja:  a.MesecnaPotrosnja,
 			DatumIsteka:       a.DatumIsteka,
+			OdrzavanjeRacuna:  a.OdrzavanjeRacuna,
 			Naziv:             a.Naziv,
 			Status:            a.Status,
 		}

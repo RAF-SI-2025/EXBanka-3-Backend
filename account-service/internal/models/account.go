@@ -18,6 +18,7 @@ type Account struct {
 	DnevnaPotrosnja   float64    `gorm:"default:0" json:"dnevna_potrosnja"`
 	MesecnaPotrosnja  float64    `gorm:"default:0" json:"mesecna_potrosnja"`
 	DatumIsteka       *time.Time `json:"datum_isteka"`
+	OdrzavanjeRacuna  float64    `gorm:"default:0" json:"odrzavanje_racuna"`
 	Naziv             string     `json:"naziv"`
 	Status            string    `gorm:"default:'aktivan'" json:"status"`
 	Client            *Client   `gorm:"foreignKey:ClientID" json:"client,omitempty"`
