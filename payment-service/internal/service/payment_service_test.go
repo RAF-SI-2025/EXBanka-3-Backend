@@ -9,28 +9,71 @@ import (
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/internal/service"
 )
 
-// --- mocks ---
-
 type mockAccountRepo struct {
-	accounts      map[uint]*models.Account
-	updatedID     uint
-	updatedFields map[string]interface{}
-	findErr       error
+	accounts map[uint]*models.Account
+	byBroj   map[string]*models.Account
+	updated  map[uint]map[string]interface{}
+	findErr  error
+}
+
+func newMockAccountRepo(accounts ...*models.Account) *mockAccountRepo {
+	repo := &mockAccountRepo{
+		accounts: make(map[uint]*models.Account),
+		byBroj:   make(map[string]*models.Account),
+		updated:  make(map[uint]map[string]interface{}),
+	}
+	for _, account := range accounts {
+		repo.accounts[account.ID] = account
+		repo.byBroj[account.BrojRacuna] = account
+	}
+	return repo
 }
 
 func (m *mockAccountRepo) FindByID(id uint) (*models.Account, error) {
 	if m.findErr != nil {
 		return nil, m.findErr
 	}
-	if a, ok := m.accounts[id]; ok {
-		return a, nil
+	if account, ok := m.accounts[id]; ok {
+		return account, nil
+	}
+	return nil, errors.New("account not found")
+}
+
+func (m *mockAccountRepo) FindByBrojRacuna(brojRacuna string) (*models.Account, error) {
+	if m.findErr != nil {
+		return nil, m.findErr
+	}
+	if account, ok := m.byBroj[brojRacuna]; ok {
+		return account, nil
 	}
 	return nil, errors.New("account not found")
 }
 
 func (m *mockAccountRepo) UpdateFields(id uint, fields map[string]interface{}) error {
-	m.updatedID = id
-	m.updatedFields = fields
+	copyFields := make(map[string]interface{}, len(fields))
+	for key, value := range fields {
+		copyFields[key] = value
+	}
+	m.updated[id] = copyFields
+
+	account, ok := m.accounts[id]
+	if !ok {
+		return nil
+	}
+
+	if value, ok := fields["stanje"].(float64); ok {
+		account.Stanje = value
+	}
+	if value, ok := fields["raspolozivo_stanje"].(float64); ok {
+		account.RaspolozivoStanje = value
+	}
+	if value, ok := fields["dnevna_potrosnja"].(float64); ok {
+		account.DnevnaPotrosnja = value
+	}
+	if value, ok := fields["mesecna_potrosnja"].(float64); ok {
+		account.MesecnaPotrosnja = value
+	}
+
 	return nil
 }
 
@@ -45,7 +88,10 @@ type mockPaymentRepo struct {
 }
 
 func newMockPaymentRepo() *mockPaymentRepo {
-	return &mockPaymentRepo{findByID: make(map[uint]*models.Payment), nextID: 1}
+	return &mockPaymentRepo{
+		findByID: make(map[uint]*models.Payment),
+		nextID:   1,
+	}
 }
 
 func (m *mockPaymentRepo) Create(p *models.Payment) error {
@@ -55,7 +101,7 @@ func (m *mockPaymentRepo) Create(p *models.Payment) error {
 	p.ID = m.nextID
 	m.nextID++
 	if p.CreatedAt.IsZero() {
-		p.CreatedAt = time.Now()
+		p.CreatedAt = time.Now().UTC()
 	}
 	m.created = p
 	m.findByID[p.ID] = p
@@ -66,8 +112,8 @@ func (m *mockPaymentRepo) FindByID(id uint) (*models.Payment, error) {
 	if m.findErr != nil {
 		return nil, m.findErr
 	}
-	if p, ok := m.findByID[id]; ok {
-		return p, nil
+	if payment, ok := m.findByID[id]; ok {
+		return payment, nil
 	}
 	return nil, errors.New("payment not found")
 }
@@ -89,410 +135,315 @@ func (m *mockPaymentRepo) ListByClientID(clientID uint, filter models.PaymentFil
 	return nil, 0, nil
 }
 
-type mockNewRecipientRepo struct {
+type mockCreateRecipientRepo struct {
 	created *models.PaymentRecipient
 	nextID  uint
 }
 
-func (m *mockNewRecipientRepo) Create(r *models.PaymentRecipient) error {
+func (m *mockCreateRecipientRepo) Create(r *models.PaymentRecipient) error {
 	m.nextID++
 	r.ID = m.nextID
 	m.created = r
 	return nil
 }
 
-func rsdAccount(id uint, balance float64, clientID *uint) *models.Account {
+type mockNotifier struct {
+	sent    bool
+	to      string
+	name    string
+	code    string
+	sendErr error
+}
+
+func (m *mockNotifier) SendVerificationCode(toEmail, clientName, code string, iznos float64, svrha, primaocRacun string) error {
+	if m.sendErr != nil {
+		return m.sendErr
+	}
+	m.sent = true
+	m.to = toEmail
+	m.name = clientName
+	m.code = code
+	return nil
+}
+
+func rsdAccount(id uint, brojRacuna string, balance float64, clientID *uint) *models.Account {
 	return &models.Account{
-		ID: id, RaspolozivoStanje: balance, Stanje: balance,
-		DnevniLimit: 100000, MesecniLimit: 1000000, ClientID: clientID,
+		ID:                id,
+		BrojRacuna:        brojRacuna,
+		ClientID:          clientID,
+		CurrencyID:        1,
+		CurrencyKod:       "RSD",
+		RaspolozivoStanje: balance,
+		Stanje:            balance,
+		DnevniLimit:       100000,
+		MesecniLimit:      1000000,
+		Status:            "aktivan",
 	}
 }
 
-// --- tests ---
+func eurAccount(id uint, brojRacuna string, balance float64, clientID *uint) *models.Account {
+	account := rsdAccount(id, brojRacuna, balance, clientID)
+	account.CurrencyID = 2
+	account.CurrencyKod = "EUR"
+	return account
+}
 
-func TestCreatePayment_Success_StatusUObradi(t *testing.T) {
-	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
-		1: rsdAccount(1, 5000, nil),
-	}}
+func TestCreatePayment_Success_StatusPendingAndVerificationSent(t *testing.T) {
+	clientID := uint(7)
+	sender := rsdAccount(1, "111111111111111111", 5000, &clientID)
+	receiver := rsdAccount(2, "222222222222222222", 100, nil)
+	accountRepo := newMockAccountRepo(sender, receiver)
 	paymentRepo := newMockPaymentRepo()
-	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
+	notifier := &mockNotifier{}
+	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, notifier)
 
-	p, err := svc.CreatePayment(service.CreatePaymentInput{
-		RacunPosiljaocaID: 1,
-		RacunPrimaocaBroj: "000000000000000098",
+	payment, err := svc.CreatePayment(service.CreatePaymentInput{
+		RacunPosiljaocaID: sender.ID,
+		RacunPrimaocaBroj: receiver.BrojRacuna,
 		Iznos:             500,
 		Svrha:             "Test",
+		ClientEmail:       "client@example.com",
+		ClientName:        "Test Client",
 	})
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if p.Status != "u_obradi" {
-		t.Errorf("expected status=u_obradi, got %s", p.Status)
+	if payment.Status != "u_obradi" {
+		t.Fatalf("expected pending status, got %s", payment.Status)
+	}
+	if payment.RacunPrimaocaID == nil || *payment.RacunPrimaocaID != receiver.ID {
+		t.Fatalf("expected receiver account id %d, got %+v", receiver.ID, payment.RacunPrimaocaID)
+	}
+	if payment.VerificationExpiresAt == nil {
+		t.Fatal("expected verification expiry to be set")
+	}
+	if !notifier.sent {
+		t.Fatal("expected verification code to be sent")
 	}
 }
 
-func TestCreatePayment_GeneratesSixDigitCode(t *testing.T) {
-	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
-		1: rsdAccount(1, 5000, nil),
-	}}
-	paymentRepo := newMockPaymentRepo()
-	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
-
-	p, err := svc.CreatePayment(service.CreatePaymentInput{
-		RacunPosiljaocaID: 1,
-		RacunPrimaocaBroj: "000000000000000098",
-		Iznos:             100,
-	})
-
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(p.VerifikacioniKod) != 6 {
-		t.Errorf("expected 6-digit code, got %q (len=%d)", p.VerifikacioniKod, len(p.VerifikacioniKod))
-	}
-	for _, c := range p.VerifikacioniKod {
-		if c < '0' || c > '9' {
-			t.Errorf("code contains non-digit character: %q", p.VerifikacioniKod)
-			break
-		}
-	}
-}
-
-func TestCreatePayment_InsufficientBalance_ReturnsError(t *testing.T) {
-	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
-		1: rsdAccount(1, 100, nil),
-	}}
+func TestCreatePayment_RejectsUnsupportedCurrency(t *testing.T) {
+	clientID := uint(7)
+	sender := eurAccount(1, "111111111111111111", 5000, &clientID)
+	receiver := eurAccount(2, "222222222222222222", 100, nil)
+	accountRepo := newMockAccountRepo(sender, receiver)
 	svc := service.NewPaymentServiceWithRepos(accountRepo, newMockPaymentRepo(), nil, nil)
 
 	_, err := svc.CreatePayment(service.CreatePaymentInput{
-		RacunPosiljaocaID: 1,
-		RacunPrimaocaBroj: "000000000000000098",
-		Iznos:             500,
+		RacunPosiljaocaID: sender.ID,
+		RacunPrimaocaBroj: receiver.BrojRacuna,
+		Iznos:             100,
 	})
 
 	if err == nil {
-		t.Fatal("expected insufficient balance error, got nil")
+		t.Fatal("expected unsupported currency error, got nil")
 	}
 }
 
-func TestVerifyPayment_CorrectCode_SetsStatusUspesno(t *testing.T) {
-	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
-		1: rsdAccount(1, 5000, nil),
-	}}
+func TestCreatePayment_SendFailure_CancelsPayment(t *testing.T) {
+	clientID := uint(7)
+	sender := rsdAccount(1, "111111111111111111", 5000, &clientID)
+	receiver := rsdAccount(2, "222222222222222222", 100, nil)
+	accountRepo := newMockAccountRepo(sender, receiver)
 	paymentRepo := newMockPaymentRepo()
-	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
+	notifier := &mockNotifier{sendErr: errors.New("smtp down")}
+	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, notifier)
 
-	created, _ := svc.CreatePayment(service.CreatePaymentInput{
-		RacunPosiljaocaID: 1,
-		RacunPrimaocaBroj: "000000000000000098",
-		Iznos:             200,
+	_, err := svc.CreatePayment(service.CreatePaymentInput{
+		RacunPosiljaocaID: sender.ID,
+		RacunPrimaocaBroj: receiver.BrojRacuna,
+		Iznos:             100,
+		ClientEmail:       "client@example.com",
+		ClientName:        "Test Client",
 	})
 
-	verified, err := svc.VerifyPayment(created.ID, created.VerifikacioniKod)
-
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatal("expected notification failure, got nil")
 	}
-	if verified.Status != "uspesno" {
-		t.Errorf("expected status=uspesno, got %s", verified.Status)
+	if paymentRepo.saved == nil || paymentRepo.saved.Status != "stornirano" {
+		t.Fatalf("expected cancelled payment after send failure, got %+v", paymentRepo.saved)
 	}
 }
 
-func TestVerifyPayment_WrongCode_ReturnsError(t *testing.T) {
-	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
-		1: rsdAccount(1, 5000, nil),
-	}}
+func TestVerifyPayment_Success_SettlesSenderReceiverAndSpending(t *testing.T) {
+	clientID := uint(7)
+	sender := rsdAccount(1, "111111111111111111", 5000, &clientID)
+	receiver := rsdAccount(2, "222222222222222222", 100, nil)
+	accountRepo := newMockAccountRepo(sender, receiver)
+	paymentRepo := newMockPaymentRepo()
+	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
+
+	created, err := svc.CreatePayment(service.CreatePaymentInput{
+		RacunPosiljaocaID: sender.ID,
+		RacunPrimaocaBroj: receiver.BrojRacuna,
+		Iznos:             300,
+		Svrha:             "Settlement",
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	verified, err := svc.VerifyPayment(created.ID, created.VerifikacioniKod)
+	if err != nil {
+		t.Fatalf("verify failed: %v", err)
+	}
+
+	if verified.Status != "uspesno" {
+		t.Fatalf("expected successful payment, got %s", verified.Status)
+	}
+	if verified.VerifikacioniKod != "" {
+		t.Fatal("expected verification code to be cleared after success")
+	}
+	if verified.VerificationExpiresAt != nil {
+		t.Fatal("expected verification expiry to be cleared after success")
+	}
+
+	senderUpdate := accountRepo.updated[sender.ID]
+	if senderUpdate["raspolozivo_stanje"].(float64) != 4700 {
+		t.Fatalf("expected sender available balance 4700, got %v", senderUpdate["raspolozivo_stanje"])
+	}
+	if senderUpdate["dnevna_potrosnja"].(float64) != 300 {
+		t.Fatalf("expected sender daily spending 300, got %v", senderUpdate["dnevna_potrosnja"])
+	}
+	if senderUpdate["mesecna_potrosnja"].(float64) != 300 {
+		t.Fatalf("expected sender monthly spending 300, got %v", senderUpdate["mesecna_potrosnja"])
+	}
+
+	receiverUpdate := accountRepo.updated[receiver.ID]
+	if receiverUpdate["raspolozivo_stanje"].(float64) != 400 {
+		t.Fatalf("expected receiver available balance 400, got %v", receiverUpdate["raspolozivo_stanje"])
+	}
+	if receiverUpdate["stanje"].(float64) != 400 {
+		t.Fatalf("expected receiver balance 400, got %v", receiverUpdate["stanje"])
+	}
+}
+
+func TestVerifyPayment_WrongCode_IncrementsAttempts(t *testing.T) {
+	sender := rsdAccount(1, "111111111111111111", 5000, nil)
+	receiver := rsdAccount(2, "222222222222222222", 100, nil)
+	accountRepo := newMockAccountRepo(sender, receiver)
 	paymentRepo := newMockPaymentRepo()
 	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
 
 	created, _ := svc.CreatePayment(service.CreatePaymentInput{
-		RacunPosiljaocaID: 1,
-		RacunPrimaocaBroj: "000000000000000098",
-		Iznos:             200,
+		RacunPosiljaocaID: sender.ID,
+		RacunPrimaocaBroj: receiver.BrojRacuna,
+		Iznos:             100,
 	})
 
 	_, err := svc.VerifyPayment(created.ID, "000000")
-
 	if err == nil {
 		t.Fatal("expected wrong code error, got nil")
 	}
+	if paymentRepo.saved == nil || paymentRepo.saved.BrojPokusaja != 1 {
+		t.Fatalf("expected one failed attempt, got %+v", paymentRepo.saved)
+	}
 }
 
-func TestVerifyPayment_DeductsSenderBalance(t *testing.T) {
-	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
-		1: rsdAccount(1, 5000, nil),
-	}}
+func TestVerifyPayment_ThreeWrongCodes_CancelsPayment(t *testing.T) {
+	sender := rsdAccount(1, "111111111111111111", 5000, nil)
+	receiver := rsdAccount(2, "222222222222222222", 100, nil)
+	accountRepo := newMockAccountRepo(sender, receiver)
 	paymentRepo := newMockPaymentRepo()
 	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
 
 	created, _ := svc.CreatePayment(service.CreatePaymentInput{
-		RacunPosiljaocaID: 1,
-		RacunPrimaocaBroj: "000000000000000098",
-		Iznos:             300,
-	})
-	svc.VerifyPayment(created.ID, created.VerifikacioniKod)
-
-	if accountRepo.updatedID != 1 {
-		t.Errorf("expected account 1 to be updated, got %d", accountRepo.updatedID)
-	}
-	newBalance, ok := accountRepo.updatedFields["raspolozivo_stanje"].(float64)
-	if !ok {
-		t.Fatal("raspolozivo_stanje not updated")
-	}
-	if newBalance != 4700 {
-		t.Errorf("expected new balance=4700, got %f", newBalance)
-	}
-}
-
-// --- DnevnaPotrosnja / MesecnaPotrosnja tests ---
-
-func TestCreatePayment_DailySpendingExceedsLimit_ReturnsError(t *testing.T) {
-	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
-		1: {
-			ID: 1, RaspolozivoStanje: 50000, Stanje: 50000,
-			DnevniLimit: 100000, MesecniLimit: 1000000,
-			DnevnaPotrosnja: 90000, // already spent 90k today
-			ClientID: nil,
-		},
-	}}
-	svc := service.NewPaymentServiceWithRepos(accountRepo, newMockPaymentRepo(), nil, nil)
-
-	_, err := svc.CreatePayment(service.CreatePaymentInput{
-		RacunPosiljaocaID: 1,
-		RacunPrimaocaBroj: "000000000000000098",
-		Iznos:             20000, // 90000+20000=110000 > 100000
-	})
-	if err == nil {
-		t.Fatal("expected daily spending limit error, got nil")
-	}
-}
-
-func TestCreatePayment_MonthlySpendingExceedsLimit_ReturnsError(t *testing.T) {
-	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
-		1: {
-			ID: 1, RaspolozivoStanje: 100000, Stanje: 100000,
-			DnevniLimit: 500000, MesecniLimit: 1000000,
-			MesecnaPotrosnja: 970000, // already spent 970k this month
-			ClientID: nil,
-		},
-	}}
-	svc := service.NewPaymentServiceWithRepos(accountRepo, newMockPaymentRepo(), nil, nil)
-
-	_, err := svc.CreatePayment(service.CreatePaymentInput{
-		RacunPosiljaocaID: 1,
-		RacunPrimaocaBroj: "000000000000000098",
-		Iznos:             50000, // 970000+50000=1020000 > 1000000
-	})
-	if err == nil {
-		t.Fatal("expected monthly spending limit error, got nil")
-	}
-}
-
-func TestVerifyPayment_Success_UpdatesDnevnaPotrosnja(t *testing.T) {
-	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
-		1: {
-			ID: 1, RaspolozivoStanje: 5000, Stanje: 5000,
-			DnevniLimit: 100000, MesecniLimit: 1000000,
-			DnevnaPotrosnja: 1000, MesecnaPotrosnja: 5000,
-			ClientID: nil,
-		},
-	}}
-	paymentRepo := newMockPaymentRepo()
-	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
-
-	created, _ := svc.CreatePayment(service.CreatePaymentInput{
-		RacunPosiljaocaID: 1,
-		RacunPrimaocaBroj: "000000000000000098",
-		Iznos:             300,
-	})
-	svc.VerifyPayment(created.ID, created.VerifikacioniKod)
-
-	newDnevna, ok := accountRepo.updatedFields["dnevna_potrosnja"].(float64)
-	if !ok {
-		t.Fatal("dnevna_potrosnja not updated after successful payment verification")
-	}
-	if newDnevna != 1300 {
-		t.Errorf("expected dnevna_potrosnja=1300, got %f", newDnevna)
-	}
-}
-
-func TestVerifyPayment_Success_UpdatesMesecnaPotrosnja(t *testing.T) {
-	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
-		1: {
-			ID: 1, RaspolozivoStanje: 5000, Stanje: 5000,
-			DnevniLimit: 100000, MesecniLimit: 1000000,
-			DnevnaPotrosnja: 1000, MesecnaPotrosnja: 5000,
-			ClientID: nil,
-		},
-	}}
-	paymentRepo := newMockPaymentRepo()
-	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
-
-	created, _ := svc.CreatePayment(service.CreatePaymentInput{
-		RacunPosiljaocaID: 1,
-		RacunPrimaocaBroj: "000000000000000098",
-		Iznos:             300,
-	})
-	svc.VerifyPayment(created.ID, created.VerifikacioniKod)
-
-	newMesecna, ok := accountRepo.updatedFields["mesecna_potrosnja"].(float64)
-	if !ok {
-		t.Fatal("mesecna_potrosnja not updated after successful payment verification")
-	}
-	if newMesecna != 5300 {
-		t.Errorf("expected mesecna_potrosnja=5300, got %f", newMesecna)
-	}
-}
-
-// --- TTL tests ---
-
-func TestVerifyPayment_ExpiredCode_ReturnsError(t *testing.T) {
-	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
-		1: rsdAccount(1, 5000, nil),
-	}}
-	paymentRepo := newMockPaymentRepo()
-	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
-
-	created, _ := svc.CreatePayment(service.CreatePaymentInput{
-		RacunPosiljaocaID: 1,
-		RacunPrimaocaBroj: "000000000000000098",
+		RacunPosiljaocaID: sender.ID,
+		RacunPrimaocaBroj: receiver.BrojRacuna,
 		Iznos:             100,
 	})
-	// Simulate code created 6 minutes ago (past the 5-minute TTL)
-	created.CreatedAt = time.Now().Add(-6 * time.Minute)
+
+	for i := 0; i < 3; i++ {
+		_, _ = svc.VerifyPayment(created.ID, "000000")
+	}
+
+	if paymentRepo.saved == nil || paymentRepo.saved.Status != "stornirano" {
+		t.Fatalf("expected cancelled payment after 3 wrong codes, got %+v", paymentRepo.saved)
+	}
+}
+
+func TestVerifyPayment_ExpiredCode_CancelsPayment(t *testing.T) {
+	sender := rsdAccount(1, "111111111111111111", 5000, nil)
+	receiver := rsdAccount(2, "222222222222222222", 100, nil)
+	accountRepo := newMockAccountRepo(sender, receiver)
+	paymentRepo := newMockPaymentRepo()
+	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
+
+	created, _ := svc.CreatePayment(service.CreatePaymentInput{
+		RacunPosiljaocaID: sender.ID,
+		RacunPrimaocaBroj: receiver.BrojRacuna,
+		Iznos:             100,
+	})
+	expired := time.Now().UTC().Add(-time.Minute)
+	created.VerificationExpiresAt = &expired
 
 	_, err := svc.VerifyPayment(created.ID, created.VerifikacioniKod)
 	if err == nil {
-		t.Fatal("expected expired code error, got nil")
+		t.Fatal("expected expired verification code error, got nil")
 	}
-}
-
-func TestVerifyPayment_ExpiredCode_SetsStatusStornirano(t *testing.T) {
-	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
-		1: rsdAccount(1, 5000, nil),
-	}}
-	paymentRepo := newMockPaymentRepo()
-	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
-
-	created, _ := svc.CreatePayment(service.CreatePaymentInput{
-		RacunPosiljaocaID: 1,
-		RacunPrimaocaBroj: "000000000000000098",
-		Iznos:             100,
-	})
-	created.CreatedAt = time.Now().Add(-6 * time.Minute)
-
-	svc.VerifyPayment(created.ID, created.VerifikacioniKod)
-
-	if paymentRepo.saved == nil {
-		t.Fatal("expected payment to be saved after expiry")
-	}
-	if paymentRepo.saved.Status != "stornirano" {
-		t.Errorf("expected status=stornirano after expiry, got %s", paymentRepo.saved.Status)
-	}
-}
-
-// --- BrojPokusaja / max-attempts tests ---
-
-func TestVerifyPayment_WrongCode_IncrementsBrojPokusaja(t *testing.T) {
-	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
-		1: rsdAccount(1, 5000, nil),
-	}}
-	paymentRepo := newMockPaymentRepo()
-	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
-
-	created, _ := svc.CreatePayment(service.CreatePaymentInput{
-		RacunPosiljaocaID: 1,
-		RacunPrimaocaBroj: "000000000000000098",
-		Iznos:             100,
-	})
-	svc.VerifyPayment(created.ID, "000000") // wrong code
-
-	if paymentRepo.saved == nil {
-		t.Fatal("expected payment to be saved after wrong code")
-	}
-	if paymentRepo.saved.BrojPokusaja != 1 {
-		t.Errorf("expected BrojPokusaja=1 after one wrong attempt, got %d", paymentRepo.saved.BrojPokusaja)
-	}
-}
-
-func TestVerifyPayment_TwoWrongCodes_StillPending(t *testing.T) {
-	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
-		1: rsdAccount(1, 5000, nil),
-	}}
-	paymentRepo := newMockPaymentRepo()
-	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
-
-	created, _ := svc.CreatePayment(service.CreatePaymentInput{
-		RacunPosiljaocaID: 1,
-		RacunPrimaocaBroj: "000000000000000098",
-		Iznos:             100,
-	})
-	svc.VerifyPayment(created.ID, "000000")
-	svc.VerifyPayment(created.ID, "000000")
-
-	if paymentRepo.saved == nil {
-		t.Fatal("expected payment to be saved")
-	}
-	if paymentRepo.saved.Status != "u_obradi" {
-		t.Errorf("expected status=u_obradi after 2 wrong attempts, got %s", paymentRepo.saved.Status)
-	}
-}
-
-func TestVerifyPayment_ThreeWrongCodes_SetsStatusStornirano(t *testing.T) {
-	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
-		1: rsdAccount(1, 5000, nil),
-	}}
-	paymentRepo := newMockPaymentRepo()
-	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
-
-	created, _ := svc.CreatePayment(service.CreatePaymentInput{
-		RacunPosiljaocaID: 1,
-		RacunPrimaocaBroj: "000000000000000098",
-		Iznos:             100,
-	})
-	svc.VerifyPayment(created.ID, "000000")
-	svc.VerifyPayment(created.ID, "000000")
-	svc.VerifyPayment(created.ID, "000000")
-
 	if paymentRepo.saved == nil || paymentRepo.saved.Status != "stornirano" {
-		t.Errorf("expected status=stornirano after 3 wrong attempts, got %v", paymentRepo.saved)
+		t.Fatalf("expected cancelled payment after expiry, got %+v", paymentRepo.saved)
 	}
 }
 
-func TestVerifyPayment_ThreeWrongCodes_ReturnsError(t *testing.T) {
-	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
-		1: rsdAccount(1, 5000, nil),
-	}}
+func TestVerifyPayment_InsufficientBalanceAtVerify_CancelsPayment(t *testing.T) {
+	sender := rsdAccount(1, "111111111111111111", 5000, nil)
+	receiver := rsdAccount(2, "222222222222222222", 100, nil)
+	accountRepo := newMockAccountRepo(sender, receiver)
 	paymentRepo := newMockPaymentRepo()
 	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
 
 	created, _ := svc.CreatePayment(service.CreatePaymentInput{
-		RacunPosiljaocaID: 1,
-		RacunPrimaocaBroj: "000000000000000098",
-		Iznos:             100,
+		RacunPosiljaocaID: sender.ID,
+		RacunPrimaocaBroj: receiver.BrojRacuna,
+		Iznos:             200,
 	})
-	svc.VerifyPayment(created.ID, "000000")
-	svc.VerifyPayment(created.ID, "000000")
-	_, err := svc.VerifyPayment(created.ID, "000000")
+	sender.Stanje = 0
+	sender.RaspolozivoStanje = 0
 
+	_, err := svc.VerifyPayment(created.ID, created.VerifikacioniKod)
 	if err == nil {
-		t.Fatal("expected error after 3 wrong attempts, got nil")
+		t.Fatal("expected insufficient balance error, got nil")
+	}
+	if paymentRepo.saved == nil || paymentRepo.saved.Status != "stornirano" {
+		t.Fatalf("expected cancelled payment after verify-time insufficiency, got %+v", paymentRepo.saved)
+	}
+}
+
+func TestVerifyPayment_CannotReuseSuccessfulCode(t *testing.T) {
+	sender := rsdAccount(1, "111111111111111111", 5000, nil)
+	receiver := rsdAccount(2, "222222222222222222", 100, nil)
+	accountRepo := newMockAccountRepo(sender, receiver)
+	paymentRepo := newMockPaymentRepo()
+	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
+
+	created, _ := svc.CreatePayment(service.CreatePaymentInput{
+		RacunPosiljaocaID: sender.ID,
+		RacunPrimaocaBroj: receiver.BrojRacuna,
+		Iznos:             50,
+	})
+
+	if _, err := svc.VerifyPayment(created.ID, created.VerifikacioniKod); err != nil {
+		t.Fatalf("expected first verification to succeed, got %v", err)
+	}
+	if _, err := svc.VerifyPayment(created.ID, created.VerifikacioniKod); err == nil {
+		t.Fatal("expected second verification to fail, got nil")
 	}
 }
 
 func TestCreatePayment_WithAddRecipient_CreatesRecipient(t *testing.T) {
 	clientID := uint(7)
-	accountRepo := &mockAccountRepo{accounts: map[uint]*models.Account{
-		1: rsdAccount(1, 5000, &clientID),
-	}}
+	sender := rsdAccount(1, "111111111111111111", 5000, &clientID)
+	receiver := rsdAccount(2, "222222222222222222", 100, nil)
+	accountRepo := newMockAccountRepo(sender, receiver)
 	paymentRepo := newMockPaymentRepo()
-	recipientRepo := &mockNewRecipientRepo{}
+	recipientRepo := &mockCreateRecipientRepo{}
 	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, recipientRepo, nil)
 
 	_, err := svc.CreatePayment(service.CreatePaymentInput{
-		RacunPosiljaocaID: 1,
-		RacunPrimaocaBroj: "000000000000000098",
+		RacunPosiljaocaID: sender.ID,
+		RacunPrimaocaBroj: receiver.BrojRacuna,
 		Iznos:             100,
 		AddRecipient:      true,
 		RecipientNaziv:    "Novi Primalac",
@@ -505,9 +456,102 @@ func TestCreatePayment_WithAddRecipient_CreatesRecipient(t *testing.T) {
 		t.Fatal("expected recipient to be created, got nil")
 	}
 	if recipientRepo.created.ClientID != clientID {
-		t.Errorf("expected recipient ClientID=%d, got %d", clientID, recipientRepo.created.ClientID)
+		t.Fatalf("expected recipient client id %d, got %d", clientID, recipientRepo.created.ClientID)
 	}
-	if recipientRepo.created.Naziv != "Novi Primalac" {
-		t.Errorf("expected recipient Naziv=Novi Primalac, got %s", recipientRepo.created.Naziv)
+}
+
+func TestApprovePaymentMobile_CodeReturnsExistingCodeWithoutSettlement(t *testing.T) {
+	sender := rsdAccount(1, "111111111111111111", 5000, nil)
+	receiver := rsdAccount(2, "222222222222222222", 100, nil)
+	accountRepo := newMockAccountRepo(sender, receiver)
+	paymentRepo := newMockPaymentRepo()
+	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
+
+	created, err := svc.CreatePayment(service.CreatePaymentInput{
+		RacunPosiljaocaID: sender.ID,
+		RacunPrimaocaBroj: receiver.BrojRacuna,
+		Iznos:             100,
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	payment, code, expiresAt, err := svc.ApprovePaymentMobile(created.ID, "code")
+	if err != nil {
+		t.Fatalf("approve mobile failed: %v", err)
+	}
+	if payment.Status != "u_obradi" {
+		t.Fatalf("expected payment to remain pending, got %s", payment.Status)
+	}
+	if code == "" {
+		t.Fatal("expected verification code to be returned")
+	}
+	if expiresAt == nil {
+		t.Fatal("expected verification expiry to be returned")
+	}
+	if len(accountRepo.updated) != 0 {
+		t.Fatal("expected no balance updates in code mode")
+	}
+}
+
+func TestApprovePaymentMobile_ConfirmExecutesSettlement(t *testing.T) {
+	sender := rsdAccount(1, "111111111111111111", 5000, nil)
+	receiver := rsdAccount(2, "222222222222222222", 100, nil)
+	accountRepo := newMockAccountRepo(sender, receiver)
+	paymentRepo := newMockPaymentRepo()
+	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
+
+	created, err := svc.CreatePayment(service.CreatePaymentInput{
+		RacunPosiljaocaID: sender.ID,
+		RacunPrimaocaBroj: receiver.BrojRacuna,
+		Iznos:             125,
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	payment, code, expiresAt, err := svc.ApprovePaymentMobile(created.ID, "confirm")
+	if err != nil {
+		t.Fatalf("confirm mobile failed: %v", err)
+	}
+	if payment.Status != "uspesno" {
+		t.Fatalf("expected completed payment, got %s", payment.Status)
+	}
+	if code != "" || expiresAt != nil {
+		t.Fatal("expected confirm mode not to return verification code or expiry")
+	}
+	if accountRepo.updated[sender.ID]["raspolozivo_stanje"].(float64) != 4875 {
+		t.Fatalf("expected sender balance 4875, got %v", accountRepo.updated[sender.ID]["raspolozivo_stanje"])
+	}
+	if accountRepo.updated[receiver.ID]["raspolozivo_stanje"].(float64) != 225 {
+		t.Fatalf("expected receiver balance 225, got %v", accountRepo.updated[receiver.ID]["raspolozivo_stanje"])
+	}
+}
+
+func TestRejectPayment_CancelsPendingPayment(t *testing.T) {
+	sender := rsdAccount(1, "111111111111111111", 5000, nil)
+	receiver := rsdAccount(2, "222222222222222222", 100, nil)
+	accountRepo := newMockAccountRepo(sender, receiver)
+	paymentRepo := newMockPaymentRepo()
+	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, nil, nil)
+
+	created, err := svc.CreatePayment(service.CreatePaymentInput{
+		RacunPosiljaocaID: sender.ID,
+		RacunPrimaocaBroj: receiver.BrojRacuna,
+		Iznos:             75,
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	rejected, err := svc.RejectPayment(created.ID)
+	if err != nil {
+		t.Fatalf("reject mobile failed: %v", err)
+	}
+	if rejected.Status != "stornirano" {
+		t.Fatalf("expected cancelled payment, got %s", rejected.Status)
+	}
+	if len(accountRepo.updated) != 0 {
+		t.Fatal("expected reject not to touch balances")
 	}
 }

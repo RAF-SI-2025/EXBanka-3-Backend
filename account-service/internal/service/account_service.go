@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/models"
@@ -27,22 +28,38 @@ type CurrencyRepositoryInterface interface {
 }
 
 type CreateAccountInput struct {
-	ClientID       *uint
-	FirmaID        *uint
-	ZaposleniID    *uint
-	CurrencyID     uint
-	Tip            string
-	Vrsta          string
-	Naziv          string
-	PocetnoStanje  float64
-	ClientEmail    string
-	ClientName     string
+	ClientID      *uint
+	FirmaID       *uint
+	ZaposleniID   *uint
+	CurrencyID    uint
+	Tip           string
+	Vrsta         string
+	Podvrsta      string
+	Naziv         string
+	PocetnoStanje float64
+	ClientEmail   string
+	ClientName    string
 }
 
 type AccountService struct {
 	accountRepo  AccountRepositoryInterface
 	currencyRepo CurrencyRepositoryInterface
 	notifSvc     *NotificationService
+}
+
+var validLicniPodvrste = map[string]struct{}{
+	"standardni":     {},
+	"stedni":         {},
+	"penzionerski":   {},
+	"za_mlade":       {},
+	"za_studente":    {},
+	"za_nezaposlene": {},
+}
+
+var validPoslovniPodvrste = map[string]struct{}{
+	"doo":       {},
+	"ad":        {},
+	"fondacija": {},
 }
 
 func NewAccountServiceWithRepos(accountRepo AccountRepositoryInterface, currencyRepo CurrencyRepositoryInterface, notifSvc *NotificationService) *AccountService {
@@ -53,7 +70,49 @@ func NewAccountServiceWithRepos(accountRepo AccountRepositoryInterface, currency
 	}
 }
 
+func defaultPodvrsta(vrsta string) string {
+	if vrsta == "poslovni" {
+		return "doo"
+	}
+	return "standardni"
+}
+
+func normalizeAndValidatePodvrsta(input CreateAccountInput, currencyKod string) (string, error) {
+	if input.Tip == "tekuci" {
+		if currencyKod != "RSD" {
+			return "", fmt.Errorf("tekuci account must use RSD currency")
+		}
+		podvrsta := input.Podvrsta
+		if podvrsta == "" {
+			podvrsta = defaultPodvrsta(input.Vrsta)
+		}
+
+		if input.Vrsta == "licni" {
+			if _, ok := validLicniPodvrste[podvrsta]; !ok {
+				return "", fmt.Errorf("invalid podvrsta %q for licni tekuci account", podvrsta)
+			}
+		} else {
+			if _, ok := validPoslovniPodvrste[podvrsta]; !ok {
+				return "", fmt.Errorf("invalid podvrsta %q for poslovni tekuci account", podvrsta)
+			}
+		}
+		return podvrsta, nil
+	}
+
+	if currencyKod == "RSD" {
+		return "", fmt.Errorf("devizni account cannot use RSD currency")
+	}
+	if input.Podvrsta != "" {
+		return "", fmt.Errorf("devizni account does not support podvrsta")
+	}
+	return "", nil
+}
+
 func (s *AccountService) CreateAccount(input CreateAccountInput) (*models.Account, error) {
+	input.Tip = strings.TrimSpace(input.Tip)
+	input.Vrsta = strings.TrimSpace(input.Vrsta)
+	input.Podvrsta = strings.TrimSpace(input.Podvrsta)
+
 	if input.Tip != "tekuci" && input.Tip != "devizni" {
 		return nil, fmt.Errorf("invalid account type: %s (must be tekuci or devizni)", input.Tip)
 	}
@@ -63,15 +122,19 @@ func (s *AccountService) CreateAccount(input CreateAccountInput) (*models.Accoun
 	if input.Vrsta == "poslovni" && input.FirmaID == nil {
 		return nil, fmt.Errorf("poslovni account requires a firma")
 	}
-	if input.Tip == "devizni" {
-		currency, err := s.currencyRepo.FindByID(input.CurrencyID)
-		if err != nil {
-			return nil, fmt.Errorf("currency not found: %w", err)
-		}
-		if currency.Kod == "RSD" {
-			return nil, fmt.Errorf("devizni account cannot use RSD currency")
-		}
+	if input.Vrsta == "licni" && input.FirmaID != nil {
+		return nil, fmt.Errorf("licni account cannot have a firma")
 	}
+
+	currency, err := s.currencyRepo.FindByID(input.CurrencyID)
+	if err != nil {
+		return nil, fmt.Errorf("currency not found: %w", err)
+	}
+	podvrsta, err := normalizeAndValidatePodvrsta(input, currency.Kod)
+	if err != nil {
+		return nil, err
+	}
+	input.Podvrsta = podvrsta
 
 	expires := time.Now().AddDate(5, 0, 0)
 	odrzavanje := 0.0
@@ -86,6 +149,7 @@ func (s *AccountService) CreateAccount(input CreateAccountInput) (*models.Accoun
 		CurrencyID:        input.CurrencyID,
 		Tip:               input.Tip,
 		Vrsta:             input.Vrsta,
+		Podvrsta:          input.Podvrsta,
 		Naziv:             input.Naziv,
 		Stanje:            input.PocetnoStanje,
 		RaspolozivoStanje: input.PocetnoStanje,

@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/models"
+	"gorm.io/gorm"
 )
 
 // ErrInvalidInput is returned by service methods when the caller provides invalid data.
@@ -36,14 +38,27 @@ type InstallmentRepositoryInterface interface {
 	ListByLoanID(loanID uint) ([]models.LoanInstallment, error)
 }
 
-// LoanService handles loan request, approval, and rejection logic.
-type LoanService struct {
-	loanRepo        LoanRepositoryInterface
-	installmentRepo InstallmentRepositoryInterface
+type AccountRepositoryInterface interface {
+	FindByBrojRacuna(brojRacuna string) (*models.Account, error)
+	FindByID(id uint) (*models.Account, error)
+	UpdateFields(id uint, fields map[string]interface{}) error
 }
 
-func NewLoanService(loanRepo LoanRepositoryInterface, installmentRepo InstallmentRepositoryInterface) *LoanService {
-	return &LoanService{loanRepo: loanRepo, installmentRepo: installmentRepo}
+// LoanService handles loan request, approval, and rejection logic.
+type LoanService struct {
+	db              *gorm.DB
+	loanRepo        LoanRepositoryInterface
+	installmentRepo InstallmentRepositoryInterface
+	accountRepo     AccountRepositoryInterface
+}
+
+func NewLoanService(db *gorm.DB, loanRepo LoanRepositoryInterface, installmentRepo InstallmentRepositoryInterface, accountRepo AccountRepositoryInterface) *LoanService {
+	return &LoanService{
+		db:              db,
+		loanRepo:        loanRepo,
+		installmentRepo: installmentRepo,
+		accountRepo:     accountRepo,
+	}
 }
 
 // CalculateInstallment computes the monthly annuity installment.
@@ -68,8 +83,8 @@ func CalculateInstallment(amount, annualRate float64, months int) float64 {
 // Exported for use in tests and handler previews.
 func BaseInterestRate(amountRSD float64, tipKamate string) float64 {
 	type band struct {
-		limit      float64
-		fiksna     float64
+		limit       float64
+		fiksna      float64
 		varijabilna float64
 	}
 	bands := []band{
@@ -97,11 +112,11 @@ func BaseInterestRate(amountRSD float64, tipKamate string) float64 {
 // Exported for use in tests and handler previews.
 func MarginForVrsta(vrsta string) float64 {
 	margins := map[string]float64{
-		"gotovinski":     1.5,
-		"stambeni":       0.0,
-		"auto":           0.5,
+		"gotovinski":      1.5,
+		"stambeni":        0.0,
+		"auto":            0.5,
 		"refinansirajuci": 0.0,
-		"studentski":     -0.5,
+		"studentski":      -0.5,
 	}
 	return margins[vrsta]
 }
@@ -132,6 +147,27 @@ func (s *LoanService) RequestLoan(input CreateLoanInput) (*models.Loan, error) {
 	}
 	if input.Period < 1 {
 		return nil, fmt.Errorf("%w: period must be at least 1 month", ErrInvalidInput)
+	}
+	if strings.TrimSpace(input.BrojRacuna) == "" {
+		return nil, fmt.Errorf("%w: broj_racuna is required", ErrInvalidInput)
+	}
+	if s.accountRepo != nil {
+		account, err := s.accountRepo.FindByBrojRacuna(strings.TrimSpace(input.BrojRacuna))
+		if err != nil {
+			return nil, fmt.Errorf("%w: payout account not found", ErrInvalidInput)
+		}
+		if account.Status != "" && account.Status != "aktivan" {
+			return nil, fmt.Errorf("%w: payout account is not active", ErrInvalidInput)
+		}
+		if account.ClientID == nil || *account.ClientID != input.ClientID {
+			return nil, fmt.Errorf("%w: payout account does not belong to the client", ErrInvalidInput)
+		}
+		if input.CurrencyID != 0 && account.CurrencyID != input.CurrencyID {
+			return nil, fmt.Errorf("%w: account currency does not match requested currency", ErrInvalidInput)
+		}
+		if account.CurrencyKod != "" && account.CurrencyKod != "RSD" {
+			return nil, fmt.Errorf("%w: loans can be requested only against RSD payout accounts", ErrInvalidInput)
+		}
 	}
 
 	base := BaseInterestRate(input.Iznos, input.TipKamate)
@@ -167,6 +203,58 @@ func (s *LoanService) RequestLoan(input CreateLoanInput) (*models.Loan, error) {
 
 // ApproveLoan approves a loan request, sets it to "aktivan", and generates installments.
 func (s *LoanService) ApproveLoan(loanID, zaposleniID uint) (*models.Loan, error) {
+	if s.db != nil {
+		var approved *models.Loan
+		err := s.db.Transaction(func(tx *gorm.DB) error {
+			var loan models.Loan
+			if err := tx.First(&loan, loanID).Error; err != nil {
+				return fmt.Errorf("loan not found: %w", err)
+			}
+			if loan.Status != "zahtev" {
+				return fmt.Errorf("loan must be in status 'zahtev' to approve, got '%s'", loan.Status)
+			}
+
+			var account models.Account
+			if err := tx.Table("accounts").
+				Select("accounts.*, currencies.kod as currency_kod").
+				Joins("LEFT JOIN currencies ON currencies.id = accounts.currency_id").
+				Where("accounts.broj_racuna = ?", loan.BrojRacuna).
+				First(&account).Error; err != nil {
+				return fmt.Errorf("payout account not found: %w", err)
+			}
+			if account.Status != "" && account.Status != "aktivan" {
+				return fmt.Errorf("payout account is not active")
+			}
+			if account.ClientID == nil || *account.ClientID != loan.ClientID {
+				return fmt.Errorf("payout account does not belong to the client")
+			}
+
+			if err := tx.Table("accounts").Where("id = ?", account.ID).Updates(map[string]interface{}{
+				"stanje":             account.Stanje + loan.Iznos,
+				"raspolozivo_stanje": account.RaspolozivoStanje + loan.Iznos,
+			}).Error; err != nil {
+				return fmt.Errorf("failed to disburse loan funds: %w", err)
+			}
+
+			loan.Status = "aktivan"
+			loan.ZaposleniID = &zaposleniID
+			if err := tx.Save(&loan).Error; err != nil {
+				return fmt.Errorf("failed to save loan: %w", err)
+			}
+
+			installments := generateInstallments(&loan)
+			if err := tx.Create(&installments).Error; err != nil {
+				return fmt.Errorf("failed to create installments: %w", err)
+			}
+			approved = &loan
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		return approved, nil
+	}
+
 	loan, err := s.loanRepo.FindByID(loanID)
 	if err != nil {
 		return nil, fmt.Errorf("loan not found: %w", err)

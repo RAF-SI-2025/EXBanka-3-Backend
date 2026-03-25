@@ -10,15 +10,15 @@ import (
 
 // mockListPaymentRepo supports list/get operations with controllable results.
 type mockListPaymentRepo struct {
-	payments        map[uint]*models.Payment
-	byAccountResult []models.Payment
-	byAccountTotal  int64
-	byClientResult  []models.Payment
-	byClientTotal   int64
+	payments          map[uint]*models.Payment
+	byAccountResult   []models.Payment
+	byAccountTotal    int64
+	byClientResult    []models.Payment
+	byClientTotal     int64
 	capturedAccFilter models.PaymentFilter
 	capturedCliFilter models.PaymentFilter
-	listErr         error
-	nextID          uint
+	listErr           error
+	nextID            uint
 }
 
 func newMockListPaymentRepo() *mockListPaymentRepo {
@@ -59,6 +59,9 @@ type stubAccountRepo struct{}
 
 func (s *stubAccountRepo) FindByID(id uint) (*models.Account, error) {
 	return &models.Account{ID: id, RaspolozivoStanje: 10000, Stanje: 10000}, nil
+}
+func (s *stubAccountRepo) FindByBrojRacuna(brojRacuna string) (*models.Account, error) {
+	return &models.Account{ID: 1, BrojRacuna: brojRacuna, RaspolozivoStanje: 10000, Stanje: 10000}, nil
 }
 func (s *stubAccountRepo) UpdateFields(id uint, fields map[string]interface{}) error { return nil }
 

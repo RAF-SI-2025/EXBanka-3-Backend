@@ -17,7 +17,7 @@ func adminLogin(t *testing.T) string {
 	t.Helper()
 	resp, body := postJSON(t, "/auth/login", map[string]string{
 		"email":    "admin@bank.com",
-		"password": "Admin1234",
+		"password": "Admin123!",
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Skipf("admin login failed (status %d); skipping employee flow tests", resp.StatusCode)
@@ -263,7 +263,7 @@ func TestEmployeeFlow_PermissionManagement(t *testing.T) {
 
 	// Set permissions
 	resp, body := putJSONWithToken(t, "/employees/"+empID+"/permissions", token, map[string]interface{}{
-		"permissionNames": []string{"employee.read"},
+		"permissionNames": []string{"employeeBasic"},
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("update permissions expected 200, got %d: %v", resp.StatusCode, body)

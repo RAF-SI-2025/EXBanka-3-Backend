@@ -63,6 +63,9 @@ type mockCurrencyRepo struct {
 }
 
 func (m *mockCurrencyRepo) FindByID(_ uint) (*models.Currency, error) {
+	if m.currency == nil && m.err == nil {
+		return &models.Currency{ID: 1, Kod: "RSD"}, nil
+	}
 	return m.currency, m.err
 }
 func (m *mockCurrencyRepo) FindByKod(_ string) (*models.Currency, error) { return nil, nil }
@@ -119,6 +122,93 @@ func TestCreateAccount_DevizniWithRSD_ReturnsError(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for devizni+RSD, got nil")
+	}
+}
+
+func TestCreateAccount_TekuciWithNonRSD_ReturnsError(t *testing.T) {
+	currencyRepo := &mockCurrencyRepo{currency: &models.Currency{ID: 2, Kod: "EUR"}}
+	svc := service.NewAccountServiceWithRepos(&mockAccountRepo{}, currencyRepo, nil)
+
+	_, err := svc.CreateAccount(service.CreateAccountInput{
+		ClientID:   ptr(1),
+		CurrencyID: 2,
+		Tip:        "tekuci",
+		Vrsta:      "licni",
+		Podvrsta:   "standardni",
+	})
+	if err == nil {
+		t.Fatal("expected error for tekuci+EUR, got nil")
+	}
+}
+
+func TestCreateAccount_DevizniWithPodvrsta_ReturnsError(t *testing.T) {
+	currencyRepo := &mockCurrencyRepo{currency: &models.Currency{ID: 2, Kod: "EUR"}}
+	svc := service.NewAccountServiceWithRepos(&mockAccountRepo{}, currencyRepo, nil)
+
+	_, err := svc.CreateAccount(service.CreateAccountInput{
+		ClientID:   ptr(1),
+		CurrencyID: 2,
+		Tip:        "devizni",
+		Vrsta:      "licni",
+		Podvrsta:   "standardni",
+	})
+	if err == nil {
+		t.Fatal("expected error for devizni with podvrsta, got nil")
+	}
+}
+
+func TestCreateAccount_LicniWithFirma_ReturnsError(t *testing.T) {
+	firmaID := uint(2)
+	svc := service.NewAccountServiceWithRepos(&mockAccountRepo{}, &mockCurrencyRepo{}, nil)
+
+	_, err := svc.CreateAccount(service.CreateAccountInput{
+		ClientID:   ptr(1),
+		FirmaID:    &firmaID,
+		CurrencyID: 1,
+		Tip:        "tekuci",
+		Vrsta:      "licni",
+	})
+	if err == nil {
+		t.Fatal("expected error for licni account with firma, got nil")
+	}
+}
+
+func TestCreateAccount_InvalidPodvrstaForTekuciLicni_ReturnsError(t *testing.T) {
+	svc := service.NewAccountServiceWithRepos(&mockAccountRepo{}, &mockCurrencyRepo{}, nil)
+
+	_, err := svc.CreateAccount(service.CreateAccountInput{
+		ClientID:   ptr(1),
+		CurrencyID: 1,
+		Tip:        "tekuci",
+		Vrsta:      "licni",
+		Podvrsta:   "doo",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid licni podvrsta, got nil")
+	}
+}
+
+func TestCreateAccount_PersistsPodvrsta(t *testing.T) {
+	repo := &mockAccountRepo{}
+	firmaID := uint(3)
+	svc := service.NewAccountServiceWithRepos(repo, &mockCurrencyRepo{}, nil)
+
+	acc, err := svc.CreateAccount(service.CreateAccountInput{
+		ClientID:   ptr(1),
+		FirmaID:    &firmaID,
+		CurrencyID: 1,
+		Tip:        "tekuci",
+		Vrsta:      "poslovni",
+		Podvrsta:   "ad",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if acc.Podvrsta != "ad" {
+		t.Fatalf("expected created account podvrsta to be persisted, got %q", acc.Podvrsta)
+	}
+	if repo.created == nil || repo.created.Podvrsta != "ad" {
+		t.Fatalf("expected repository create to receive podvrsta 'ad', got %+v", repo.created)
 	}
 }
 
@@ -381,6 +471,19 @@ func TestListAllAccounts_FilterByStatus(t *testing.T) {
 	}
 	if repo.capturedFilter.Status != "aktivan" {
 		t.Errorf("expected filter Status=aktivan, got %q", repo.capturedFilter.Status)
+	}
+}
+
+func TestListAllAccounts_FilterByAccountNumber(t *testing.T) {
+	repo := &mockAccountRepo{listAllResult: []models.Account{{ID: 1}}, listAllTotal: 1}
+	svc := service.NewAccountServiceWithRepos(repo, &mockCurrencyRepo{}, nil)
+
+	_, _, err := svc.ListAllAccounts(models.AccountFilter{AccountNumber: "265-123"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.capturedFilter.AccountNumber != "265-123" {
+		t.Errorf("expected filter AccountNumber=265-123, got %q", repo.capturedFilter.AccountNumber)
 	}
 }
 

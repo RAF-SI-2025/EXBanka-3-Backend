@@ -18,6 +18,8 @@ type ClientService struct {
 	permRepo   repository.PermissionRepositoryInterface
 }
 
+const clientSetupTokenDurationHours = 24
+
 func NewClientService(cfg *config.Config, db *gorm.DB) *ClientService {
 	return &ClientService{
 		cfg:        cfg,
@@ -58,23 +60,38 @@ type UpdateClientInput struct {
 	PovezaniRacuni string
 }
 
-func (s *ClientService) CreateClient(input CreateClientInput) (*models.Client, error) {
+func (s *ClientService) CreateClient(input CreateClientInput) (*models.Client, string, error) {
 	if err := util.ValidatePhoneNumber(input.BrojTelefona); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := util.ValidateEmail(input.Email); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := util.ValidateDateOfBirth(time.Unix(input.DatumRodjenja, 0)); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	emailExists, err := s.clientRepo.EmailExists(input.Email, 0)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if emailExists {
-		return nil, fmt.Errorf("email already in use")
+		return nil, "", fmt.Errorf("email already in use")
+	}
+
+	salt, err := util.GenerateSalt()
+	if err != nil {
+		return nil, "", err
+	}
+
+	placeholderSecret, err := util.GenerateRandomSecret()
+	if err != nil {
+		return nil, "", err
+	}
+
+	hashedPassword, err := util.HashPassword(placeholderSecret, salt)
+	if err != nil {
+		return nil, "", err
 	}
 
 	client := &models.Client{
@@ -85,13 +102,14 @@ func (s *ClientService) CreateClient(input CreateClientInput) (*models.Client, e
 		Email:          input.Email,
 		BrojTelefona:   input.BrojTelefona,
 		Adresa:         input.Adresa,
-		Password:       "pending",
-		SaltPassword:   "pending",
+		Password:       hashedPassword,
+		SaltPassword:   salt,
+		Aktivan:        false,
 		PovezaniRacuni: input.PovezaniRacuni,
 	}
 
 	if err := s.clientRepo.Create(client); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	// Assign default client permissions (client.basic)
@@ -105,7 +123,12 @@ func (s *ClientService) CreateClient(input CreateClientInput) (*models.Client, e
 		}
 	}
 
-	return client, nil
+	setupToken, err := util.GenerateClientSetupToken(client.ID, client.Email, s.cfg.JWTSecret, clientSetupTokenDurationHours)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return client, setupToken, nil
 }
 
 func (s *ClientService) GetClient(id uint) (*models.Client, error) {

@@ -3,13 +3,11 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/config"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/models"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/repository"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/service"
-	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/util"
 	"gorm.io/gorm"
 )
 
@@ -33,6 +31,7 @@ type createAccountHTTPRequest struct {
 	CurrencyID    uint    `json:"currencyId"`
 	Tip           string  `json:"tip"`
 	Vrsta         string  `json:"vrsta"`
+	Podvrsta      string  `json:"podvrsta"`
 	Naziv         string  `json:"naziv"`
 	PocetnoStanje float64 `json:"pocetnoStanje"`
 }
@@ -43,14 +42,12 @@ func (h *CreateAccountHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	var employeeID uint
-	authHeader := r.Header.Get("Authorization")
-	if authHeader != "" {
-		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
-		claims, err := util.ParseToken(tokenStr, h.cfg.JWTSecret)
-		if err == nil && claims.EmployeeID != 0 {
-			employeeID = claims.EmployeeID
-		}
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireEmployeePermissionHTTP(w, claims, models.PermEmployeeBasic) {
+		return
 	}
 
 	var req createAccountHTTPRequest
@@ -63,6 +60,7 @@ func (h *CreateAccountHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		CurrencyID:    req.CurrencyID,
 		Tip:           req.Tip,
 		Vrsta:         req.Vrsta,
+		Podvrsta:      req.Podvrsta,
 		Naziv:         req.Naziv,
 		PocetnoStanje: req.PocetnoStanje,
 	}
@@ -77,9 +75,8 @@ func (h *CreateAccountHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 	if req.FirmaID != 0 {
 		input.FirmaID = &req.FirmaID
 	}
-	if employeeID != 0 {
-		input.ZaposleniID = &employeeID
-	}
+	employeeID := claims.EmployeeID
+	input.ZaposleniID = &employeeID
 
 	acc, err := h.svc.CreateAccount(input)
 	if err != nil {
@@ -88,10 +85,13 @@ func (h *CreateAccountHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
+	if created, getErr := h.svc.GetAccount(acc.ID); getErr == nil {
+		acc = created
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"account": acc,
-		"message": "Račun uspešno kreiran",
+		"account": toAccountHTTPJSON(acc),
+		"message": "Racun uspesno kreiran",
 	})
 }

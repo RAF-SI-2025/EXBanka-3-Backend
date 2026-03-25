@@ -87,6 +87,7 @@ func main() {
 	httpMux := http.NewServeMux()
 	httpMux.HandleFunc("/health", healthCheck)
 	httpMux.Handle("/api/v1/auth/client/login", middleware.CORS(http.HandlerFunc(clientAuthH.Login)))
+	httpMux.Handle("/api/v1/auth/client/activate", middleware.CORS(http.HandlerFunc(clientAuthH.Activate)))
 	httpMux.Handle("/", middleware.CORS(gwMux))
 
 	httpServer := &http.Server{

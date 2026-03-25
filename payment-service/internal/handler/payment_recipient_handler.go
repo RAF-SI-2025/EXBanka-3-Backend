@@ -4,6 +4,7 @@ import (
 	"context"
 
 	prv1 "github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/gen/proto/payment_recipient/v1"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/internal/middleware"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/internal/models"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/internal/repository"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/internal/service"
@@ -37,20 +38,30 @@ func NewPaymentRecipientHandlerWithService(svc PaymentRecipientServiceInterface)
 
 func toRecipientProto(r *models.PaymentRecipient) *prv1.RecipientProto {
 	return &prv1.RecipientProto{
-		Id:        uint64(r.ID),
-		ClientId:  uint64(r.ClientID),
-		Naziv:     r.Naziv,
+		Id:         uint64(r.ID),
+		ClientId:   uint64(r.ClientID),
+		Naziv:      r.Naziv,
 		BrojRacuna: r.BrojRacuna,
 	}
 }
 
 func (h *PaymentRecipientHandler) CreateRecipient(ctx context.Context, req *prv1.CreateRecipientRequest) (*prv1.RecipientResponse, error) {
-	if req.ClientId == 0 {
+	clientID := uint(req.ClientId)
+	if claims, ok := middleware.GetClaimsFromContext(ctx); ok {
+		if claims.ClientID == 0 {
+			return nil, status.Error(codes.PermissionDenied, "client access required")
+		}
+		if req.ClientId != 0 && uint(req.ClientId) != claims.ClientID {
+			return nil, status.Error(codes.PermissionDenied, "access denied")
+		}
+		clientID = claims.ClientID
+	}
+	if clientID == 0 {
 		return nil, status.Error(codes.InvalidArgument, "client_id is required")
 	}
 
 	r, err := h.svc.CreateRecipient(service.CreateRecipientInput{
-		ClientID:   uint(req.ClientId),
+		ClientID:   clientID,
 		Naziv:      req.Naziv,
 		BrojRacuna: req.BrojRacuna,
 	})
@@ -65,7 +76,18 @@ func (h *PaymentRecipientHandler) CreateRecipient(ctx context.Context, req *prv1
 }
 
 func (h *PaymentRecipientHandler) ListRecipients(ctx context.Context, req *prv1.ListRecipientsRequest) (*prv1.ListRecipientsResponse, error) {
-	recipients, err := h.svc.ListRecipientsByClient(uint(req.ClientId))
+	clientID := uint(req.ClientId)
+	if claims, ok := middleware.GetClaimsFromContext(ctx); ok {
+		if claims.ClientID == 0 {
+			return nil, status.Error(codes.PermissionDenied, "client access required")
+		}
+		if req.ClientId != 0 && uint(req.ClientId) != claims.ClientID {
+			return nil, status.Error(codes.PermissionDenied, "access denied")
+		}
+		clientID = claims.ClientID
+	}
+
+	recipients, err := h.svc.ListRecipientsByClient(clientID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list recipients")
 	}
@@ -82,7 +104,18 @@ func (h *PaymentRecipientHandler) ListRecipients(ctx context.Context, req *prv1.
 }
 
 func (h *PaymentRecipientHandler) UpdateRecipient(ctx context.Context, req *prv1.UpdateRecipientRequest) (*prv1.RecipientResponse, error) {
-	r, err := h.svc.UpdateRecipient(uint(req.Id), uint(req.ClientId), service.UpdateRecipientInput{
+	clientID := uint(req.ClientId)
+	if claims, ok := middleware.GetClaimsFromContext(ctx); ok {
+		if claims.ClientID == 0 {
+			return nil, status.Error(codes.PermissionDenied, "client access required")
+		}
+		if req.ClientId != 0 && uint(req.ClientId) != claims.ClientID {
+			return nil, status.Error(codes.PermissionDenied, "access denied")
+		}
+		clientID = claims.ClientID
+	}
+
+	r, err := h.svc.UpdateRecipient(uint(req.Id), clientID, service.UpdateRecipientInput{
 		Naziv:      req.Naziv,
 		BrojRacuna: req.BrojRacuna,
 	})
@@ -97,7 +130,18 @@ func (h *PaymentRecipientHandler) UpdateRecipient(ctx context.Context, req *prv1
 }
 
 func (h *PaymentRecipientHandler) DeleteRecipient(ctx context.Context, req *prv1.DeleteRecipientRequest) (*prv1.DeleteRecipientResponse, error) {
-	if err := h.svc.DeleteRecipient(uint(req.Id), uint(req.ClientId)); err != nil {
+	clientID := uint(req.ClientId)
+	if claims, ok := middleware.GetClaimsFromContext(ctx); ok {
+		if claims.ClientID == 0 {
+			return nil, status.Error(codes.PermissionDenied, "client access required")
+		}
+		if req.ClientId != 0 && uint(req.ClientId) != claims.ClientID {
+			return nil, status.Error(codes.PermissionDenied, "access denied")
+		}
+		clientID = claims.ClientID
+	}
+
+	if err := h.svc.DeleteRecipient(uint(req.Id), clientID); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%s", err.Error())
 	}
 

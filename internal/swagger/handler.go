@@ -22,7 +22,7 @@ func HandlerUI(w http.ResponseWriter, r *http.Request) {
 const swaggerUIHTML = `<!DOCTYPE html>
 <html>
 <head>
-  <title>Bank App API — Swagger UI</title>
+  <title>EXBanka 3 Gateway API - Swagger UI</title>
   <meta charset="utf-8"/>
   <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css"/>
 </head>

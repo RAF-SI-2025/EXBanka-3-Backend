@@ -71,6 +71,14 @@ func (s *CardService) CreateCard(input CreateCardInput) (*models.Card, error) {
 	if err != nil {
 		return nil, fmt.Errorf("account not found: %w", err)
 	}
+	if input.ClientID == 0 {
+		return nil, fmt.Errorf("client id is required")
+	}
+	if account.Vrsta != "poslovni" {
+		if account.ClientID == nil || *account.ClientID != input.ClientID {
+			return nil, fmt.Errorf("licni account cards can only be issued to the account owner")
+		}
+	}
 
 	// Enforce card limits.
 	if account.Vrsta == "poslovni" {
@@ -103,6 +111,9 @@ func (s *CardService) CreateCard(input CreateCardInput) (*models.Card, error) {
 		Status:         "aktivna",
 		DatumKreiranja: now,
 		DatumIsteka:    now.AddDate(5, 0, 0),
+	}
+	if account.Vrsta == "poslovni" && account.ClientID != nil && *account.ClientID != input.ClientID {
+		card.OvlascenoLiceID = &input.ClientID
 	}
 
 	if err := s.cardRepo.Create(card); err != nil {

@@ -2,9 +2,11 @@ package handler
 
 import (
 	"context"
+	"fmt"
 
 	clientv1 "github.com/RAF-SI-2025/EXBanka-3-Backend/client-service/gen/proto/client/v1"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/client-service/internal/config"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/client-service/internal/middleware"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/client-service/internal/models"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/client-service/internal/repository"
 	svc "github.com/RAF-SI-2025/EXBanka-3-Backend/client-service/internal/service"
@@ -15,7 +17,7 @@ import (
 
 // ClientServiceInterface allows handler tests to inject a mock service.
 type ClientServiceInterface interface {
-	CreateClient(input svc.CreateClientInput) (*models.Client, error)
+	CreateClient(input svc.CreateClientInput) (*models.Client, string, error)
 	GetClient(id uint) (*models.Client, error)
 	ListClients(filter repository.ClientFilter) ([]models.Client, int64, error)
 	UpdateClient(id uint, input svc.UpdateClientInput) (*models.Client, error)
@@ -74,7 +76,7 @@ func toClientListItem(client *models.Client) *clientv1.ClientListItem {
 }
 
 func (h *ClientHandler) CreateClient(ctx context.Context, req *clientv1.CreateClientRequest) (*clientv1.CreateClientResponse, error) {
-	client, err := h.svc.CreateClient(svc.CreateClientInput{
+	client, setupToken, err := h.svc.CreateClient(svc.CreateClientInput{
 		Ime:            req.Ime,
 		Prezime:        req.Prezime,
 		DatumRodjenja:  req.DatumRodjenja,
@@ -90,11 +92,15 @@ func (h *ClientHandler) CreateClient(ctx context.Context, req *clientv1.CreateCl
 
 	return &clientv1.CreateClientResponse{
 		Client:  toClientProto(client),
-		Message: "Client created",
+		Message: fmt.Sprintf("Client created. Complete initial password setup with token: %s", setupToken),
 	}, nil
 }
 
 func (h *ClientHandler) GetClient(ctx context.Context, req *clientv1.GetClientRequest) (*clientv1.GetClientResponse, error) {
+	if claims, ok := middleware.GetClaimsFromContext(ctx); ok && claims.ClientID != 0 && uint(req.Id) != claims.ClientID {
+		return nil, status.Error(codes.PermissionDenied, "access denied")
+	}
+
 	client, err := h.svc.GetClient(uint(req.Id))
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "client not found")
@@ -130,6 +136,10 @@ func (h *ClientHandler) ListClients(ctx context.Context, req *clientv1.ListClien
 }
 
 func (h *ClientHandler) UpdateClient(ctx context.Context, req *clientv1.UpdateClientRequest) (*clientv1.UpdateClientResponse, error) {
+	if claims, ok := middleware.GetClaimsFromContext(ctx); ok && claims.ClientID != 0 && uint(req.Id) != claims.ClientID {
+		return nil, status.Error(codes.PermissionDenied, "access denied")
+	}
+
 	client, err := h.svc.UpdateClient(uint(req.Id), svc.UpdateClientInput{
 		Ime:            req.Ime,
 		Prezime:        req.Prezime,

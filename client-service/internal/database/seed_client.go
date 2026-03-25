@@ -64,6 +64,7 @@ func SeedDefaultClient(db *gorm.DB) error {
 		Adresa:        "Knez Mihailova 10, Beograd",
 		Password:      hashedPwd,
 		SaltPassword:  salt,
+		Aktivan:       true,
 		Permissions:   clientPerms,
 	}
 

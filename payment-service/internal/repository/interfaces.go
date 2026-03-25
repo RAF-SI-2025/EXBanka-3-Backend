@@ -12,6 +12,7 @@ type PaymentRecipientRepositoryInterface interface {
 
 type AccountRepositoryInterface interface {
 	FindByID(id uint) (*models.Account, error)
+	FindByBrojRacuna(brojRacuna string) (*models.Account, error)
 	UpdateFields(id uint, fields map[string]interface{}) error
 }
 

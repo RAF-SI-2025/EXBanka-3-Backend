@@ -205,6 +205,10 @@ func (s *AuthService) ClientLogin(email, password string) (string, string, *mode
 		return "", "", nil, err
 	}
 
+	if !client.Aktivan {
+		return "", "", nil, fmt.Errorf("account is not active")
+	}
+
 	ok, err := util.VerifyPassword(password, client.SaltPassword, client.Password)
 	if err != nil {
 		return "", "", nil, err
@@ -226,6 +230,57 @@ func (s *AuthService) ClientLogin(email, password string) (string, string, *mode
 	}
 
 	return accessToken, refreshToken, client, nil
+}
+
+func (s *AuthService) ActivateClientAccount(tokenStr, password, passwordConfirm string) error {
+	if password != passwordConfirm {
+		return fmt.Errorf("passwords do not match")
+	}
+	if err := util.ValidatePasswordPolicy(password); err != nil {
+		return err
+	}
+
+	claims, err := util.ParseToken(tokenStr, s.cfg.JWTSecret)
+	if err != nil {
+		return fmt.Errorf("invalid or expired activation token")
+	}
+	if claims.TokenType != "setup" || claims.TokenSource != "client_setup" || claims.ClientID == 0 {
+		return fmt.Errorf("invalid activation token")
+	}
+
+	client, err := s.clientRepo.FindByID(claims.ClientID)
+	if err != nil {
+		return fmt.Errorf("invalid activation token")
+	}
+	if client.Email != claims.Email {
+		return fmt.Errorf("invalid activation token")
+	}
+	if client.Aktivan {
+		return fmt.Errorf("account is already active")
+	}
+
+	salt, err := util.GenerateSalt()
+	if err != nil {
+		return err
+	}
+	hashed, err := util.HashPassword(password, salt)
+	if err != nil {
+		return err
+	}
+
+	if err := s.clientRepo.UpdateFields(client.ID, map[string]interface{}{
+		"password":      hashed,
+		"salt_password": salt,
+		"aktivan":       true,
+	}); err != nil {
+		return err
+	}
+
+	if s.notifSvc != nil {
+		_ = s.notifSvc.SendConfirmationEmail(client.Email, client.Ime+" "+client.Prezime)
+	}
+
+	return nil
 }
 
 func (s *AuthService) ResetPassword(tokenStr, password, passwordConfirm string) error {

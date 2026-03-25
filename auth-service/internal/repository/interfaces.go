@@ -19,6 +19,8 @@ type TokenRepositoryInterface interface {
 // ClientRepositoryInterface defines the methods used by AuthService for client authentication.
 type ClientRepositoryInterface interface {
 	FindByEmail(email string) (*models.Client, error)
+	FindByID(id uint) (*models.Client, error)
+	UpdateFields(id uint, fields map[string]interface{}) error
 }
 
 // Compile-time checks: ensure concrete repositories satisfy their interfaces.

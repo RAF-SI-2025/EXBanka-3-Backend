@@ -13,9 +13,9 @@ type captureFilterLoanRepo struct {
 	capturedFilter service.LoanFilter
 }
 
-func (r *captureFilterLoanRepo) Create(l *models.Loan) error              { l.ID = 1; return nil }
-func (r *captureFilterLoanRepo) FindByID(_ uint) (*models.Loan, error)    { return nil, nil }
-func (r *captureFilterLoanRepo) Save(l *models.Loan) error                { return nil }
+func (r *captureFilterLoanRepo) Create(l *models.Loan) error                  { l.ID = 1; return nil }
+func (r *captureFilterLoanRepo) FindByID(_ uint) (*models.Loan, error)        { return nil, nil }
+func (r *captureFilterLoanRepo) Save(l *models.Loan) error                    { return nil }
 func (r *captureFilterLoanRepo) ListByClientID(_ uint) ([]models.Loan, error) { return r.loans, nil }
 func (r *captureFilterLoanRepo) ListByStatus(_ string) ([]models.Loan, error) { return r.loans, nil }
 func (r *captureFilterLoanRepo) ListFiltered(f service.LoanFilter) ([]models.Loan, error) {
@@ -46,7 +46,7 @@ func (r *captureFilterInstallmentRepo) ListByLoanID(_ uint) ([]models.LoanInstal
 
 func newFilterSvc(loans []models.Loan) (*service.LoanService, *captureFilterLoanRepo) {
 	lr := &captureFilterLoanRepo{loans: loans}
-	return service.NewLoanService(lr, &captureFilterInstallmentRepo{}), lr
+	return service.NewLoanService(nil, lr, &captureFilterInstallmentRepo{}, nil), lr
 }
 
 // --- ListRequestsFiltered tests ---

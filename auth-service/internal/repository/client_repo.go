@@ -22,4 +22,17 @@ func (r *ClientRepository) FindByEmail(email string) (*models.Client, error) {
 	return &client, nil
 }
 
+func (r *ClientRepository) FindByID(id uint) (*models.Client, error) {
+	var client models.Client
+	err := r.db.Preload("Permissions").First(&client, id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &client, nil
+}
+
+func (r *ClientRepository) UpdateFields(id uint, fields map[string]interface{}) error {
+	return r.db.Model(&models.Client{}).Where("id = ?", id).Updates(fields).Error
+}
+
 var _ ClientRepositoryInterface = (*ClientRepository)(nil)

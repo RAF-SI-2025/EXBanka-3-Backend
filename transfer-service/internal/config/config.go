@@ -22,6 +22,10 @@ type Config struct {
 	JWTSecret          string
 	JWTAccessDuration  int
 	JWTRefreshDuration int
+
+	SMTPHost string
+	SMTPPort int
+	SMTPFrom string
 }
 
 func Load() *Config {
@@ -29,6 +33,7 @@ func Load() *Config {
 
 	jwtAccessDur, _ := strconv.Atoi(getEnv("JWT_ACCESS_DURATION_MINUTES", "15"))
 	jwtRefreshDur, _ := strconv.Atoi(getEnv("JWT_REFRESH_DURATION_HOURS", "24"))
+	smtpPort, _ := strconv.Atoi(getEnv("SMTP_PORT", "1025"))
 
 	cfg := &Config{
 		DBHost:             getEnv("DB_HOST", "localhost"),
@@ -42,6 +47,9 @@ func Load() *Config {
 		JWTSecret:          getEnv("JWT_SECRET", "super-secret-jwt-key-change-in-production"),
 		JWTAccessDuration:  jwtAccessDur,
 		JWTRefreshDuration: jwtRefreshDur,
+		SMTPHost:           getEnv("SMTP_HOST", "mailhog"),
+		SMTPPort:           smtpPort,
+		SMTPFrom:           getEnv("SMTP_FROM", "noreply@bank.com"),
 	}
 
 	slog.Info("Transfer-service config loaded",

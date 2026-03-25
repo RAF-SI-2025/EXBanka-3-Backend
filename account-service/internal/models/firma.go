@@ -7,7 +7,7 @@ type Firma struct {
 	Naziv             string          `gorm:"not null" json:"naziv"`
 	MaticniBroj       string          `gorm:"uniqueIndex;not null" json:"maticni_broj"`
 	PIB               string          `gorm:"uniqueIndex;not null" json:"pib"`
-	SifraDelatnostiID uint            `json:"sifra_delatnosti_id"`
+	SifraDelatnostiID *uint           `json:"sifra_delatnosti_id,omitempty"`
 	SifraDelatnosti   SifraDelatnosti `gorm:"foreignKey:SifraDelatnostiID" json:"sifra_delatnosti,omitempty"`
 	Adresa            string          `json:"adresa"`
 	VlasnikID         *uint           `json:"vlasnik_id"`

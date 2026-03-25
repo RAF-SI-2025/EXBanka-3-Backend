@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/config"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/models"
 )
 
@@ -16,10 +16,15 @@ type listClientAccountsRepo interface {
 
 type ListClientAccountsHTTPHandler struct {
 	repo listClientAccountsRepo
+	cfg  *config.Config
 }
 
 func NewListClientAccountsHTTPHandler(repo listClientAccountsRepo) *ListClientAccountsHTTPHandler {
 	return &ListClientAccountsHTTPHandler{repo: repo}
+}
+
+func NewListClientAccountsHTTPHandlerWithConfig(repo listClientAccountsRepo, cfg *config.Config) *ListClientAccountsHTTPHandler {
+	return &ListClientAccountsHTTPHandler{repo: repo, cfg: cfg}
 }
 
 // clientIDFromPath extracts the last path segment from e.g. "/api/v1/accounts/client/42"
@@ -34,41 +39,18 @@ func clientIDFromPath(path string) (uint, error) {
 	return uint(id), nil
 }
 
-type firmaJSON struct {
-	ID          uint   `json:"id"`
-	Naziv       string `json:"naziv"`
-	MaticniBroj string `json:"maticniBroj"`
-	PIB         string `json:"pib"`
-	Adresa      string `json:"adresa"`
-	SifraDelatnostiID uint `json:"sifraDelatnostiId"`
-}
-
-type clientAccountJSON struct {
-	ID                uint       `json:"id"`
-	BrojRacuna        string     `json:"brojRacuna"`
-	ClientID          *uint      `json:"clientId"`
-	FirmaID           *uint      `json:"firmaId"`
-	Firma             *firmaJSON `json:"firma,omitempty"`
-	CurrencyID        uint       `json:"currencyId"`
-	CurrencyKod       string     `json:"currencyKod"`
-	Tip               string     `json:"tip"`
-	Vrsta             string     `json:"vrsta"`
-	Stanje            float64    `json:"stanje"`
-	RaspolozivoStanje float64    `json:"raspolozivoStanje"`
-	DnevniLimit       float64    `json:"dnevniLimit"`
-	MesecniLimit      float64    `json:"mesecniLimit"`
-	DnevnaPotrosnja   float64    `json:"dnevnaPotrosnja"`
-	MesecnaPotrosnja  float64    `json:"mesecnaPotrosnja"`
-	DatumIsteka       *time.Time `json:"datumIsteka"`
-	OdrzavanjeRacuna  float64    `json:"odrzavanjeRacuna"`
-	Naziv             string     `json:"naziv"`
-	Status            string     `json:"status"`
-}
-
 func (h *ListClientAccountsHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	clientID, err := clientIDFromPath(r.URL.Path)
 	if err != nil {
 		http.Error(w, `{"error":"invalid client id"}`, http.StatusBadRequest)
+		return
+	}
+
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireClientOrEmployeeHTTP(w, claims, clientID, models.PermClientBasic, models.PermEmployeeBasic) {
 		return
 	}
 
@@ -78,41 +60,9 @@ func (h *ListClientAccountsHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http
 		return
 	}
 
-	result := make([]clientAccountJSON, 0, len(accounts))
+	result := make([]accountHTTPJSON, 0, len(accounts))
 	for _, a := range accounts {
-		var firma *firmaJSON
-		if a.Firma != nil {
-			firma = &firmaJSON{
-				ID:                a.Firma.ID,
-				Naziv:             a.Firma.Naziv,
-				MaticniBroj:       a.Firma.MaticniBroj,
-				PIB:               a.Firma.PIB,
-				Adresa:            a.Firma.Adresa,
-				SifraDelatnostiID: a.Firma.SifraDelatnostiID,
-			}
-		}
-		item := clientAccountJSON{
-			ID:                a.ID,
-			BrojRacuna:        a.BrojRacuna,
-			ClientID:          a.ClientID,
-			FirmaID:           a.FirmaID,
-			Firma:             firma,
-			CurrencyID:        a.CurrencyID,
-			CurrencyKod:       a.Currency.Kod,
-			Tip:               a.Tip,
-			Vrsta:             a.Vrsta,
-			Stanje:            a.Stanje,
-			RaspolozivoStanje: a.RaspolozivoStanje,
-			DnevniLimit:       a.DnevniLimit,
-			MesecniLimit:      a.MesecniLimit,
-			DnevnaPotrosnja:   a.DnevnaPotrosnja,
-			MesecnaPotrosnja:  a.MesecnaPotrosnja,
-			DatumIsteka:       a.DatumIsteka,
-			OdrzavanjeRacuna:  a.OdrzavanjeRacuna,
-			Naziv:             a.Naziv,
-			Status:            a.Status,
-		}
-		result = append(result, item)
+		result = append(result, toAccountHTTPJSON(&a))
 	}
 
 	w.Header().Set("Content-Type", "application/json")

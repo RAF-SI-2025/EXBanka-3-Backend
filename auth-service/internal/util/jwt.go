@@ -9,12 +9,12 @@ import (
 
 type Claims struct {
 	EmployeeID  uint     `json:"employee_id"`
-	ClientID    uint     `json:"client_id"`    // 0 for employee tokens
+	ClientID    uint     `json:"client_id"` // 0 for employee tokens
 	Email       string   `json:"email"`
-	Username    string   `json:"username"`     // empty for client tokens
+	Username    string   `json:"username"` // empty for client tokens
 	Permissions []string `json:"permissions"`
-	TokenType   string   `json:"token_type"`   // "access" | "refresh"
-	TokenSource string   `json:"token_source"` // "employee" | "client"
+	TokenType   string   `json:"token_type"`   // "access" | "refresh" | "setup"
+	TokenSource string   `json:"token_source"` // "employee" | "client" | "client_setup"
 	jwt.RegisteredClaims
 }
 
@@ -77,6 +77,21 @@ func GenerateClientRefreshToken(clientID uint, email string, secret string, dura
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
+}
+
+func GenerateClientSetupToken(clientID uint, email string, secret string, durationHours int) (string, error) {
+	claims := Claims{
+		ClientID:    clientID,
+		Email:       email,
+		TokenType:   "setup",
+		TokenSource: "client_setup",
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(durationHours) * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+	}
+
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
 }
 

@@ -72,7 +72,9 @@ func (m *mockTokenRepo) InvalidateEmployeeTokens(employeeID uint, tokenType stri
 // ---- mock client repository ----
 
 type mockClientRepo struct {
-	findByEmailFn func(email string) (*models.Client, error)
+	findByEmailFn  func(email string) (*models.Client, error)
+	findByIDFn     func(id uint) (*models.Client, error)
+	updateFieldsFn func(id uint, fields map[string]interface{}) error
 }
 
 func (m *mockClientRepo) FindByEmail(email string) (*models.Client, error) {
@@ -80,6 +82,20 @@ func (m *mockClientRepo) FindByEmail(email string) (*models.Client, error) {
 		return m.findByEmailFn(email)
 	}
 	return nil, errors.New("not implemented")
+}
+
+func (m *mockClientRepo) FindByID(id uint) (*models.Client, error) {
+	if m.findByIDFn != nil {
+		return m.findByIDFn(id)
+	}
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockClientRepo) UpdateFields(id uint, fields map[string]interface{}) error {
+	if m.updateFieldsFn != nil {
+		return m.updateFieldsFn(id, fields)
+	}
+	return nil
 }
 
 // ---- compile-time interface checks ----
@@ -277,6 +293,7 @@ func TestClientLogin_Success(t *testing.T) {
 		Email:        "user@gmail.com",
 		Password:     hash,
 		SaltPassword: salt,
+		Aktivan:      true,
 		Permissions:  []models.Permission{},
 	}
 
@@ -310,6 +327,7 @@ func TestClientLogin_WrongPassword(t *testing.T) {
 		Email:        "user@gmail.com",
 		Password:     hash,
 		SaltPassword: salt,
+		Aktivan:      true,
 	}
 
 	svc := newTestAuthServiceWithClient(
@@ -345,11 +363,38 @@ func TestClientLogin_NonExistentEmail(t *testing.T) {
 	}
 }
 
+func TestClientLogin_InactiveClient(t *testing.T) {
+	salt, _ := util.GenerateSalt()
+	hash, _ := util.HashPassword("ClientPass12", salt)
+
+	client := &models.Client{
+		ID:           12,
+		Email:        "inactive@gmail.com",
+		Password:     hash,
+		SaltPassword: salt,
+		Aktivan:      false,
+	}
+
+	svc := newTestAuthServiceWithClient(
+		&mockEmployeeRepo{},
+		&mockClientRepo{findByEmailFn: func(email string) (*models.Client, error) { return client, nil }},
+		&mockTokenRepo{},
+	)
+
+	_, _, _, err := svc.ClientLogin("inactive@gmail.com", "ClientPass12")
+	if err == nil {
+		t.Fatal("ClientLogin() expected error for inactive client, got nil")
+	}
+	if !strings.Contains(err.Error(), "account is not active") {
+		t.Errorf("ClientLogin() error = %q, want contains %q", err.Error(), "account is not active")
+	}
+}
+
 func TestClientLogin_JWTContainsClientID(t *testing.T) {
 	salt, _ := util.GenerateSalt()
 	hash, _ := util.HashPassword("ClientPass12", salt)
 
-	client := &models.Client{ID: 42, Email: "user@gmail.com", Password: hash, SaltPassword: salt, Permissions: []models.Permission{}}
+	client := &models.Client{ID: 42, Email: "user@gmail.com", Password: hash, SaltPassword: salt, Aktivan: true, Permissions: []models.Permission{}}
 
 	svc := newTestAuthServiceWithClient(
 		&mockEmployeeRepo{},
@@ -375,7 +420,7 @@ func TestClientLogin_JWTTokenSourceIsClient(t *testing.T) {
 	salt, _ := util.GenerateSalt()
 	hash, _ := util.HashPassword("ClientPass12", salt)
 
-	client := &models.Client{ID: 7, Email: "user@gmail.com", Password: hash, SaltPassword: salt, Permissions: []models.Permission{}}
+	client := &models.Client{ID: 7, Email: "user@gmail.com", Password: hash, SaltPassword: salt, Aktivan: true, Permissions: []models.Permission{}}
 
 	svc := newTestAuthServiceWithClient(
 		&mockEmployeeRepo{},
@@ -409,5 +454,72 @@ func TestRequestPasswordReset_NonExistentEmail(t *testing.T) {
 	err := svc.RequestPasswordReset("nobody@bank.com")
 	if err != nil {
 		t.Errorf("RequestPasswordReset() expected nil for non-existent email, got: %v", err)
+	}
+}
+
+func TestActivateClientAccount_Success(t *testing.T) {
+	token, err := util.GenerateClientSetupToken(55, "newclient@gmail.com", "test-secret", 24)
+	if err != nil {
+		t.Fatalf("GenerateClientSetupToken() error: %v", err)
+	}
+
+	var updatedFields map[string]interface{}
+	client := &models.Client{
+		ID:      55,
+		Ime:     "Novi",
+		Prezime: "Klijent",
+		Email:   "newclient@gmail.com",
+		Aktivan: false,
+	}
+
+	svc := newTestAuthServiceWithClient(
+		&mockEmployeeRepo{},
+		&mockClientRepo{
+			findByIDFn: func(id uint) (*models.Client, error) { return client, nil },
+			updateFieldsFn: func(id uint, fields map[string]interface{}) error {
+				updatedFields = fields
+				return nil
+			},
+		},
+		&mockTokenRepo{},
+	)
+
+	err = svc.ActivateClientAccount(token, "ClientPass12", "ClientPass12")
+	if err != nil {
+		t.Fatalf("ActivateClientAccount() unexpected error: %v", err)
+	}
+	if updatedFields == nil {
+		t.Fatal("ActivateClientAccount() did not update client fields")
+	}
+	if updatedFields["aktivan"] != true {
+		t.Errorf("expected aktivan=true, got %#v", updatedFields["aktivan"])
+	}
+	if updatedFields["password"] == "" || updatedFields["salt_password"] == "" {
+		t.Error("ActivateClientAccount() did not set password hash and salt")
+	}
+}
+
+func TestActivateClientAccount_RejectsActiveClient(t *testing.T) {
+	token, err := util.GenerateClientSetupToken(77, "active@gmail.com", "test-secret", 24)
+	if err != nil {
+		t.Fatalf("GenerateClientSetupToken() error: %v", err)
+	}
+
+	svc := newTestAuthServiceWithClient(
+		&mockEmployeeRepo{},
+		&mockClientRepo{
+			findByIDFn: func(id uint) (*models.Client, error) {
+				return &models.Client{ID: 77, Email: "active@gmail.com", Aktivan: true}, nil
+			},
+		},
+		&mockTokenRepo{},
+	)
+
+	err = svc.ActivateClientAccount(token, "ClientPass12", "ClientPass12")
+	if err == nil {
+		t.Fatal("ActivateClientAccount() expected error for active client, got nil")
+	}
+	if !strings.Contains(err.Error(), "already active") {
+		t.Errorf("ActivateClientAccount() error = %q, want contains %q", err.Error(), "already active")
 	}
 }

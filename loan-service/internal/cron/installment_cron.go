@@ -7,45 +7,175 @@ import (
 	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/models"
+	"gorm.io/gorm"
 )
 
 // installmentRepo is the subset of InstallmentRepository used by InstallmentCollector.
 type installmentRepo interface {
 	FindDueInstallments(asOf time.Time) ([]models.LoanInstallment, error)
+	ListByLoanID(loanID uint) ([]models.LoanInstallment, error)
 	Save(inst *models.LoanInstallment) error
+}
+
+type collectorLoanRepo interface {
+	FindByID(id uint) (*models.Loan, error)
+	SaveLoan(loan *models.Loan) error
+}
+
+type collectorAccountRepo interface {
+	FindByBrojRacuna(brojRacuna string) (*models.Account, error)
+	UpdateFields(id uint, fields map[string]interface{}) error
 }
 
 // InstallmentCollector processes due installments once per run.
 type InstallmentCollector struct {
-	repo installmentRepo
+	db          *gorm.DB
+	repo        installmentRepo
+	loanRepo    collectorLoanRepo
+	accountRepo collectorAccountRepo
 }
 
-func NewInstallmentCollector(repo installmentRepo) *InstallmentCollector {
-	return &InstallmentCollector{repo: repo}
+func NewInstallmentCollector(db *gorm.DB, repo installmentRepo, loanRepo collectorLoanRepo, accountRepo collectorAccountRepo) *InstallmentCollector {
+	return &InstallmentCollector{
+		db:          db,
+		repo:        repo,
+		loanRepo:    loanRepo,
+		accountRepo: accountRepo,
+	}
 }
 
-// Run finds all installments due on or before asOf and marks them as "placena".
-// In a real deployment, payment would be deducted from the client's account via
-// the account-service before marking as paid; failed payments would be marked "kasni".
 func (c *InstallmentCollector) Run(asOf time.Time) error {
 	installments, err := c.repo.FindDueInstallments(asOf)
 	if err != nil {
 		return err
 	}
 
-	now := time.Now()
 	for i := range installments {
 		inst := &installments[i]
-		inst.Status = "placena"
-		inst.DatumPlacanja = &now
-		if err := c.repo.Save(inst); err != nil {
+		if err := c.collectOne(inst); err != nil {
 			slog.Error("Failed to save installment", "id", inst.ID, "error", err)
 			continue
 		}
-		slog.Info("Installment collected", "id", inst.ID, "loan_id", inst.LoanID, "iznos", inst.Iznos)
+		slog.Info("Installment collection attempted", "id", inst.ID, "loan_id", inst.LoanID, "status", inst.Status, "iznos", inst.Iznos)
 	}
 
 	slog.Info("Installment collection run complete", "processed", len(installments))
+	return nil
+}
+
+func (c *InstallmentCollector) collectOne(inst *models.LoanInstallment) error {
+	if c.db != nil {
+		return c.db.Transaction(func(tx *gorm.DB) error {
+			var currentInst models.LoanInstallment
+			if err := tx.First(&currentInst, inst.ID).Error; err != nil {
+				return err
+			}
+			var loan models.Loan
+			if err := tx.First(&loan, currentInst.LoanID).Error; err != nil {
+				return err
+			}
+			var account models.Account
+			if err := tx.Table("accounts").
+				Select("accounts.*, currencies.kod as currency_kod").
+				Joins("LEFT JOIN currencies ON currencies.id = accounts.currency_id").
+				Where("accounts.broj_racuna = ?", loan.BrojRacuna).
+				First(&account).Error; err != nil {
+				currentInst.Status = "kasni"
+				currentInst.DatumPlacanja = nil
+				return tx.Save(&currentInst).Error
+			}
+
+			if account.Status != "aktivan" || account.RaspolozivoStanje < currentInst.Iznos {
+				currentInst.Status = "kasni"
+				currentInst.DatumPlacanja = nil
+				return tx.Save(&currentInst).Error
+			}
+
+			now := time.Now().UTC()
+			if err := tx.Table("accounts").Where("id = ?", account.ID).Updates(map[string]interface{}{
+				"stanje":             account.Stanje - currentInst.Iznos,
+				"raspolozivo_stanje": account.RaspolozivoStanje - currentInst.Iznos,
+				"dnevna_potrosnja":   account.DnevnaPotrosnja + currentInst.Iznos,
+				"mesecna_potrosnja":  account.MesecnaPotrosnja + currentInst.Iznos,
+			}).Error; err != nil {
+				return err
+			}
+
+			currentInst.Status = "placena"
+			currentInst.DatumPlacanja = &now
+			if err := tx.Save(&currentInst).Error; err != nil {
+				return err
+			}
+
+			var remaining int64
+			if err := tx.Model(&models.LoanInstallment{}).
+				Where("loan_id = ? AND status <> ?", loan.ID, "placena").
+				Count(&remaining).Error; err != nil {
+				return err
+			}
+			if remaining == 0 {
+				loan.Status = "zatvoren"
+				if err := tx.Save(&loan).Error; err != nil {
+					return err
+				}
+			}
+
+			*inst = currentInst
+			return nil
+		})
+	}
+
+	loan, err := c.loanRepo.FindByID(inst.LoanID)
+	if err != nil {
+		return err
+	}
+	account, err := c.accountRepo.FindByBrojRacuna(loan.BrojRacuna)
+	if err != nil {
+		inst.Status = "kasni"
+		inst.DatumPlacanja = nil
+		return c.repo.Save(inst)
+	}
+
+	if account.Status != "aktivan" || account.RaspolozivoStanje < inst.Iznos {
+		inst.Status = "kasni"
+		inst.DatumPlacanja = nil
+		return c.repo.Save(inst)
+	}
+
+	if err := c.accountRepo.UpdateFields(account.ID, map[string]interface{}{
+		"stanje":             account.Stanje - inst.Iznos,
+		"raspolozivo_stanje": account.RaspolozivoStanje - inst.Iznos,
+		"dnevna_potrosnja":   account.DnevnaPotrosnja + inst.Iznos,
+		"mesecna_potrosnja":  account.MesecnaPotrosnja + inst.Iznos,
+	}); err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	inst.Status = "placena"
+	inst.DatumPlacanja = &now
+	if err := c.repo.Save(inst); err != nil {
+		return err
+	}
+
+	all, err := c.repo.ListByLoanID(inst.LoanID)
+	if err != nil {
+		return err
+	}
+	allPaid := true
+	for _, item := range all {
+		if item.ID == inst.ID {
+			item = *inst
+		}
+		if item.Status != "placena" {
+			allPaid = false
+			break
+		}
+	}
+	if allPaid {
+		loan.Status = "zatvoren"
+		return c.loanRepo.SaveLoan(loan)
+	}
 	return nil
 }
 

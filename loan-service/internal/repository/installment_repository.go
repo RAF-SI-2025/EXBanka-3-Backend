@@ -19,10 +19,10 @@ func (r *InstallmentRepository) CreateBatch(items []models.LoanInstallment) erro
 	return r.db.Create(&items).Error
 }
 
-// FindDueInstallments returns all installments with datum_dospeca <= asOf and status = "ocekuje".
+// FindDueInstallments returns installments due on or before asOf that are still awaiting collection.
 func (r *InstallmentRepository) FindDueInstallments(asOf time.Time) ([]models.LoanInstallment, error) {
 	var items []models.LoanInstallment
-	if err := r.db.Where("datum_dospeca <= ? AND status = ?", asOf, "ocekuje").
+	if err := r.db.Where("datum_dospeca <= ? AND status IN ?", asOf, []string{"ocekuje", "kasni"}).
 		Find(&items).Error; err != nil {
 		return nil, err
 	}

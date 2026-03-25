@@ -6,6 +6,8 @@ import (
 	"time"
 
 	transferv1 "github.com/RAF-SI-2025/EXBanka-3-Backend/transfer-service/gen/proto/transfer/v1"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/transfer-service/internal/config"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/transfer-service/internal/middleware"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/transfer-service/internal/models"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/transfer-service/internal/repository"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/transfer-service/internal/service"
@@ -25,14 +27,16 @@ type TransferServiceInterface interface {
 type TransferHandler struct {
 	transferv1.UnimplementedTransferServiceServer
 	svc TransferServiceInterface
+	db  *gorm.DB
 }
 
-func NewTransferHandler(db *gorm.DB, exchangeServiceURL string) *TransferHandler {
+func NewTransferHandler(db *gorm.DB, exchangeServiceURL string, cfg *config.Config) *TransferHandler {
 	accountRepo := repository.NewAccountRepository(db)
 	transferRepo := repository.NewTransferRepository(db)
 	exchangeSvc := service.NewHTTPExchangeRateService(exchangeServiceURL)
-	svc := service.NewTransferServiceWithRepos(accountRepo, transferRepo, exchangeSvc)
-	return &TransferHandler{svc: svc}
+	notifier := service.NewNotificationService(cfg)
+	svc := service.NewTransferServiceWithReposAndNotifier(accountRepo, transferRepo, exchangeSvc, notifier)
+	return &TransferHandler{svc: svc, db: db}
 }
 
 func NewTransferHandlerWithService(svc TransferServiceInterface) *TransferHandler {
@@ -41,16 +45,16 @@ func NewTransferHandlerWithService(svc TransferServiceInterface) *TransferHandle
 
 func toTransferProto(t *models.Transfer) *transferv1.TransferProto {
 	return &transferv1.TransferProto{
-		Id:                 uint64(t.ID),
-		RacunPosiljaocaId:  uint64(t.RacunPosiljaocaID),
-		RacunPrimaocaId:    uint64(t.RacunPrimaocaID),
-		Iznos:              t.Iznos,
-		ValutaIznosa:       t.ValutaIznosa,
-		KonvertovaniIznos:  t.KonvertovaniIznos,
-		Kurs:               t.Kurs,
-		Svrha:              t.Svrha,
-		Status:             t.Status,
-		VremeTransakcije:   t.VremeTransakcije.Format(time.RFC3339),
+		Id:                uint64(t.ID),
+		RacunPosiljaocaId: uint64(t.RacunPosiljaocaID),
+		RacunPrimaocaId:   uint64(t.RacunPrimaocaID),
+		Iznos:             t.Iznos,
+		ValutaIznosa:      t.ValutaIznosa,
+		KonvertovaniIznos: t.KonvertovaniIznos,
+		Kurs:              t.Kurs,
+		Svrha:             t.Svrha,
+		Status:            t.Status,
+		VremeTransakcije:  t.VremeTransakcije.Format(time.RFC3339),
 	}
 }
 
@@ -117,6 +121,22 @@ func (h *TransferHandler) CreateTransfer(ctx context.Context, req *transferv1.Cr
 	if req.RacunPosiljaocaId == 0 || req.RacunPrimaocaId == 0 {
 		return nil, status.Error(codes.InvalidArgument, "sender and receiver account IDs are required")
 	}
+	if claims, ok := middleware.GetClaimsFromContext(ctx); ok && claims.ClientID != 0 {
+		senderOwned, err := h.accountOwnedByClient(uint(req.RacunPosiljaocaId), claims.ClientID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to verify account ownership")
+		}
+		if !senderOwned {
+			return nil, status.Error(codes.PermissionDenied, "access denied")
+		}
+		receiverOwned, err := h.accountOwnedByClient(uint(req.RacunPrimaocaId), claims.ClientID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to verify account ownership")
+		}
+		if !receiverOwned {
+			return nil, status.Error(codes.PermissionDenied, "access denied")
+		}
+	}
 
 	input := service.CreateTransferInput{
 		RacunPosiljaocaID: uint(req.RacunPosiljaocaId),
@@ -132,11 +152,21 @@ func (h *TransferHandler) CreateTransfer(ctx context.Context, req *transferv1.Cr
 
 	return &transferv1.CreateTransferResponse{
 		Transfer: toTransferProto(tr),
-		Message:  fmt.Sprintf("Transfer of %.2f %s created successfully", tr.Iznos, tr.ValutaIznosa),
+		Message:  fmt.Sprintf("Transfer of %.2f %s created successfully. Verification code sent to email.", tr.Iznos, tr.ValutaIznosa),
 	}, nil
 }
 
 func (h *TransferHandler) ListTransfersByAccount(ctx context.Context, req *transferv1.ListTransfersByAccountRequest) (*transferv1.ListTransfersResponse, error) {
+	if claims, ok := middleware.GetClaimsFromContext(ctx); ok && claims.ClientID != 0 {
+		owned, err := h.accountOwnedByClient(uint(req.AccountId), claims.ClientID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to verify account ownership")
+		}
+		if !owned {
+			return nil, status.Error(codes.PermissionDenied, "access denied")
+		}
+	}
+
 	filter := parseFilterFromAccount(req)
 
 	transfers, total, err := h.svc.ListTransfersByAccount(uint(req.AccountId), filter)
@@ -158,6 +188,10 @@ func (h *TransferHandler) ListTransfersByAccount(ctx context.Context, req *trans
 }
 
 func (h *TransferHandler) ListTransfersByClient(ctx context.Context, req *transferv1.ListTransfersByClientRequest) (*transferv1.ListTransfersResponse, error) {
+	if claims, ok := middleware.GetClaimsFromContext(ctx); ok && claims.ClientID != 0 && uint(req.ClientId) != claims.ClientID {
+		return nil, status.Error(codes.PermissionDenied, "access denied")
+	}
+
 	filter := parseFilterFromClient(req)
 
 	transfers, total, err := h.svc.ListTransfersByClient(uint(req.ClientId), filter)
@@ -176,4 +210,17 @@ func (h *TransferHandler) ListTransfersByClient(ctx context.Context, req *transf
 		Page:      req.Page,
 		PageSize:  req.PageSize,
 	}, nil
+}
+
+func (h *TransferHandler) accountOwnedByClient(accountID, clientID uint) (bool, error) {
+	if h.db == nil {
+		return true, nil
+	}
+
+	var account models.Account
+	if err := h.db.First(&account, accountID).Error; err != nil {
+		return false, err
+	}
+
+	return account.ClientID != nil && *account.ClientID == clientID, nil
 }

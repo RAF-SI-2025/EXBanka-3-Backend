@@ -6,8 +6,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/config"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/models"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/service"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/util"
 )
 
 // cardServiceInterface is the subset of CardService used by the HTTP handler.
@@ -24,10 +26,18 @@ type cardServiceInterface interface {
 // CardHTTPHandler handles all /api/v1/cards/* routes.
 type CardHTTPHandler struct {
 	svc cardServiceInterface
+	cfg *config.Config
 }
 
 func NewCardHTTPHandler(svc cardServiceInterface) *CardHTTPHandler {
 	return &CardHTTPHandler{svc: svc}
+}
+
+func NewCardHTTPHandlerWithConfig(svc cardServiceInterface, cfg *config.Config) *CardHTTPHandler {
+	return &CardHTTPHandler{
+		svc: svc,
+		cfg: cfg,
+	}
 }
 
 // ServeHTTP dispatches to the appropriate sub-handler based on path and method.
@@ -102,6 +112,14 @@ func parseID(raw string) (uint, error) {
 
 // POST /api/v1/cards
 func (h *CardHTTPHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireEmployeePermissionHTTP(w, claims, models.PermEmployeeBasic) {
+		return
+	}
+
 	var req struct {
 		AccountID    uint   `json:"accountId"`
 		ClientID     uint   `json:"clientId"`
@@ -133,6 +151,11 @@ func (h *CardHTTPHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/v1/cards/{id}
 func (h *CardHTTPHandler) handleGet(w http.ResponseWriter, r *http.Request, rawID string) {
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+
 	id, err := parseID(rawID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid card id")
@@ -148,12 +171,32 @@ func (h *CardHTTPHandler) handleGet(w http.ResponseWriter, r *http.Request, rawI
 		writeError(w, http.StatusNotFound, "card not found")
 		return
 	}
+	if claims != nil && (claims.ClientID != 0 || claims.TokenSource == "client") {
+		if card.ClientID != claims.ClientID {
+			writeError(w, http.StatusForbidden, "access denied")
+			return
+		}
+		if !util.HasPermission(claims, models.PermClientBasic) {
+			writeError(w, http.StatusForbidden, "insufficient permissions")
+			return
+		}
+	} else if !requireEmployeePermissionHTTP(w, claims, models.PermEmployeeBasic) {
+		return
+	}
 
 	writeJSON(w, http.StatusOK, card)
 }
 
 // GET /api/v1/cards/account/{id}
 func (h *CardHTTPHandler) handleListByAccount(w http.ResponseWriter, r *http.Request, rawID string) {
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireEmployeePermissionHTTP(w, claims, models.PermEmployeeBasic) {
+		return
+	}
+
 	id, err := parseID(rawID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid account id")
@@ -177,6 +220,14 @@ func (h *CardHTTPHandler) handleListByClient(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireClientOrEmployeeHTTP(w, claims, id, models.PermClientBasic, models.PermEmployeeBasic) {
+		return
+	}
+
 	cards, err := h.svc.ListByClient(id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -188,6 +239,11 @@ func (h *CardHTTPHandler) handleListByClient(w http.ResponseWriter, r *http.Requ
 
 // PUT /api/v1/cards/{id}/block
 func (h *CardHTTPHandler) handleBlock(w http.ResponseWriter, r *http.Request, rawID string) {
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+
 	cardID, err := parseID(rawID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid card id")
@@ -199,6 +255,19 @@ func (h *CardHTTPHandler) handleBlock(w http.ResponseWriter, r *http.Request, ra
 	}
 	if r.Body != nil {
 		json.NewDecoder(r.Body).Decode(&req)
+	}
+	if claims != nil && (claims.ClientID != 0 || claims.TokenSource == "client") {
+		if claims.ClientID == 0 || !util.HasPermission(claims, models.PermClientBasic) {
+			writeError(w, http.StatusForbidden, "insufficient permissions")
+			return
+		}
+		if req.ClientID != 0 && req.ClientID != claims.ClientID {
+			writeError(w, http.StatusForbidden, "access denied")
+			return
+		}
+		req.ClientID = claims.ClientID
+	} else if !requireEmployeePermissionHTTP(w, claims, models.PermEmployeeBasic) {
+		return
 	}
 
 	card, err := h.svc.BlockCard(cardID, req.ClientID)
@@ -212,6 +281,14 @@ func (h *CardHTTPHandler) handleBlock(w http.ResponseWriter, r *http.Request, ra
 
 // PUT /api/v1/cards/{id}/unblock
 func (h *CardHTTPHandler) handleUnblock(w http.ResponseWriter, r *http.Request, rawID string) {
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireEmployeePermissionHTTP(w, claims, models.PermEmployeeBasic) {
+		return
+	}
+
 	cardID, err := parseID(rawID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid card id")
@@ -229,6 +306,14 @@ func (h *CardHTTPHandler) handleUnblock(w http.ResponseWriter, r *http.Request, 
 
 // PUT /api/v1/cards/{id}/deactivate
 func (h *CardHTTPHandler) handleDeactivate(w http.ResponseWriter, r *http.Request, rawID string) {
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireEmployeePermissionHTTP(w, claims, models.PermEmployeeBasic) {
+		return
+	}
+
 	cardID, err := parseID(rawID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid card id")

@@ -37,6 +37,12 @@ func Migrate(db *gorm.DB) error {
 		return fmt.Errorf("migration failed: %w", err)
 	}
 
+	if err := db.Model(&models.Client{}).
+		Where("password <> ? AND salt_password <> ?", "pending", "pending").
+		Update("aktivan", true).Error; err != nil {
+		return fmt.Errorf("failed to backfill active clients: %w", err)
+	}
+
 	slog.Info("Client-service migrations complete")
 	return nil
 }

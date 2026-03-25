@@ -43,6 +43,9 @@ func main() {
 
 	recipientH := handler.NewPaymentRecipientHandler(db)
 	paymentH := handler.NewPaymentHandler(db, cfg)
+	createPaymentHTTPH := handler.NewCreatePaymentHTTPHandler(db, cfg)
+	mobileVerificationH := handler.NewPaymentMobileVerificationHandler(db, cfg)
+	prenosHTTPH := handler.NewPrenosHTTPHandler(db, cfg)
 
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
@@ -85,6 +88,11 @@ func main() {
 
 	httpMux := http.NewServeMux()
 	httpMux.HandleFunc("/health", healthCheck)
+	combinedPaymentHandler := handler.NewCombinedPaymentHandler(createPaymentHTTPH, mobileVerificationH, gwMux)
+	httpMux.Handle("/api/v1/payments", middleware.CORS(combinedPaymentHandler))
+	httpMux.Handle("/api/v1/payments/", middleware.CORS(combinedPaymentHandler))
+	httpMux.Handle("/api/v1/prenos", middleware.CORS(prenosHTTPH))
+	httpMux.Handle("/api/v1/prenos/", middleware.CORS(prenosHTTPH))
 	httpMux.Handle("/", middleware.CORS(gwMux))
 
 	httpServer := &http.Server{

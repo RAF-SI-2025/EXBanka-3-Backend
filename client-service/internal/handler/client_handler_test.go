@@ -16,6 +16,7 @@ import (
 
 type mockClientService struct {
 	createResult      *models.Client
+	createSetupToken  string
 	createErr         error
 	getResult         *models.Client
 	getErr            error
@@ -27,8 +28,8 @@ type mockClientService struct {
 	updatePermsErr    error
 }
 
-func (m *mockClientService) CreateClient(input svc.CreateClientInput) (*models.Client, error) {
-	return m.createResult, m.createErr
+func (m *mockClientService) CreateClient(input svc.CreateClientInput) (*models.Client, string, error) {
+	return m.createResult, m.createSetupToken, m.createErr
 }
 func (m *mockClientService) GetClient(id uint) (*models.Client, error) {
 	return m.getResult, m.getErr
@@ -47,7 +48,7 @@ func (m *mockClientService) UpdateClientPermissions(id uint, permissionNames []s
 
 func TestCreateClient_Success(t *testing.T) {
 	client := &models.Client{ID: 1, Ime: "Ana", Prezime: "Jovic", Email: "ana@test.com"}
-	h := handler.NewClientHandlerWithService(&mockClientService{createResult: client})
+	h := handler.NewClientHandlerWithService(&mockClientService{createResult: client, createSetupToken: "setup-token"})
 
 	resp, err := h.CreateClient(context.Background(), &clientv1.CreateClientRequest{
 		Ime:     "Ana",
@@ -65,6 +66,9 @@ func TestCreateClient_Success(t *testing.T) {
 	}
 	if resp.Message == "" {
 		t.Error("expected non-empty message")
+	}
+	if resp.Message != "Client created. Complete initial password setup with token: setup-token" {
+		t.Errorf("unexpected message: %q", resp.Message)
 	}
 }
 

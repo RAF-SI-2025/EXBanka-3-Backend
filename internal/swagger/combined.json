@@ -1,923 +1,629 @@
 {
-  "swagger": "2.0",
+  "openapi": "3.0.3",
   "info": {
-    "title": "Bank App API",
-    "description": "Authentication and employee management REST API",
-    "version": "1.0"
+    "title": "EXBanka 3 Gateway API",
+    "version": "2026-03-25",
+    "description": "Current gateway-facing route surface for the EXBanka 3 stack. Business endpoints are served through nginx on /api/v1 and routed to the underlying microservices."
   },
-  "tags": [
+  "servers": [
     {
-      "name": "AuthService"
-    },
-    {
-      "name": "EmployeeService"
+      "url": "http://localhost",
+      "description": "Local nginx gateway"
     }
   ],
-  "consumes": [
-    "application/json"
-  ],
-  "produces": [
-    "application/json"
+  "tags": [
+    { "name": "Auth" },
+    { "name": "Employees" },
+    { "name": "Clients" },
+    { "name": "Accounts" },
+    { "name": "Cards" },
+    { "name": "Transfers" },
+    { "name": "Payments" },
+    { "name": "Recipients" },
+    { "name": "Exchange" },
+    { "name": "Loans" },
+    { "name": "Docs" }
   ],
   "paths": {
-    "/api/v1/auth/activate": {
-      "post": {
-        "summary": "Activate a new employee account using the token from the email link.\nRequires two matching password fields (confirmation).",
-        "operationId": "AuthService_ActivateAccount",
+    "/health": {
+      "get": {
+        "tags": ["Docs"],
+        "summary": "Legacy shared backend health check",
         "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/v1ActivateAccountResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/v1ActivateAccountRequest"
-            }
-          }
-        ],
-        "tags": [
-          "AuthService"
-        ]
+          "200": { "description": "Service is reachable" }
+        }
+      }
+    },
+    "/swagger.json": {
+      "get": {
+        "tags": ["Docs"],
+        "summary": "OpenAPI route surface served by the shared backend",
+        "responses": {
+          "200": { "description": "OpenAPI JSON" }
+        }
+      }
+    },
+    "/swagger-ui": {
+      "get": {
+        "tags": ["Docs"],
+        "summary": "Swagger UI for the gateway route surface",
+        "responses": {
+          "200": { "description": "Swagger UI HTML" }
+        }
       }
     },
     "/api/v1/auth/login": {
       "post": {
-        "summary": "Login with email + password, returns JWT pair",
-        "operationId": "AuthService_Login",
+        "tags": ["Auth"],
+        "summary": "Employee login",
         "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/v1LoginResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/v1LoginRequest"
-            }
-          }
-        ],
-        "tags": [
-          "AuthService"
-        ]
-      }
-    },
-    "/api/v1/auth/password-reset/confirm": {
-      "post": {
-        "summary": "Complete password reset using the token from the email link",
-        "operationId": "AuthService_ResetPassword",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/v1ResetPasswordResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/v1ResetPasswordRequest"
-            }
-          }
-        ],
-        "tags": [
-          "AuthService"
-        ]
-      }
-    },
-    "/api/v1/auth/password-reset/request": {
-      "post": {
-        "summary": "Request a password-reset email",
-        "operationId": "AuthService_RequestPasswordReset",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/v1RequestPasswordResetResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/v1RequestPasswordResetRequest"
-            }
-          }
-        ],
-        "tags": [
-          "AuthService"
-        ]
+          "200": { "description": "Employee access and refresh tokens issued" }
+        }
       }
     },
     "/api/v1/auth/refresh": {
       "post": {
-        "summary": "Exchange a refresh token for a new access token",
-        "operationId": "AuthService_RefreshToken",
+        "tags": ["Auth"],
+        "summary": "Refresh employee access token",
         "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/v1RefreshTokenResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/v1RefreshTokenRequest"
-            }
-          }
-        ],
-        "tags": [
-          "AuthService"
-        ]
+          "200": { "description": "New employee access token issued" }
+        }
       }
     },
-    "/api/v1/employees": {
-      "get": {
-        "summary": "List employees with optional filters and pagination.\nReturns: ime, prezime, email, pozicija, broj_telefona, aktivan",
-        "operationId": "EmployeeService_ListEmployees",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/v1ListEmployeesResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "emailFilter",
-            "in": "query",
-            "required": false,
-            "type": "string"
-          },
-          {
-            "name": "nameFilter",
-            "description": "matches ime OR prezime",
-            "in": "query",
-            "required": false,
-            "type": "string"
-          },
-          {
-            "name": "pozicijaFilter",
-            "in": "query",
-            "required": false,
-            "type": "string"
-          },
-          {
-            "name": "page",
-            "in": "query",
-            "required": false,
-            "type": "integer",
-            "format": "int32"
-          },
-          {
-            "name": "pageSize",
-            "in": "query",
-            "required": false,
-            "type": "integer",
-            "format": "int32"
-          }
-        ],
-        "tags": [
-          "EmployeeService"
-        ]
-      },
+    "/api/v1/auth/activate": {
       "post": {
-        "summary": "Create a new employee (generates activation token, sends email)",
-        "operationId": "EmployeeService_CreateEmployee",
+        "tags": ["Auth"],
+        "summary": "Activate employee account",
         "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/v1CreateEmployeeResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/v1CreateEmployeeRequest"
-            }
-          }
-        ],
-        "tags": [
-          "EmployeeService"
-        ]
+          "200": { "description": "Employee account activated" }
+        }
       }
     },
-    "/api/v1/employees/{id}": {
-      "get": {
-        "summary": "Get full employee details including permissions",
-        "operationId": "EmployeeService_GetEmployee",
+    "/api/v1/auth/password-reset/request": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Request employee password reset",
         "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/v1GetEmployeeResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "type": "string",
-            "format": "uint64"
-          }
-        ],
-        "tags": [
-          "EmployeeService"
-        ]
-      },
-      "put": {
-        "summary": "Update employee fields (excludes id and password).\nReturns error if target employee has admin permission.",
-        "operationId": "EmployeeService_UpdateEmployee",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/v1UpdateEmployeeResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "type": "string",
-            "format": "uint64"
-          },
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/EmployeeServiceUpdateEmployeeBody"
-            }
-          }
-        ],
-        "tags": [
-          "EmployeeService"
-        ]
+          "200": { "description": "Reset request accepted" }
+        }
       }
     },
-    "/api/v1/employees/{id}/active": {
-      "patch": {
-        "summary": "Toggle active/inactive status",
-        "operationId": "EmployeeService_SetEmployeeActive",
+    "/api/v1/auth/password-reset/confirm": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Confirm employee password reset",
         "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/v1SetEmployeeActiveResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "type": "string",
-            "format": "uint64"
-          },
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/EmployeeServiceSetEmployeeActiveBody"
-            }
-          }
-        ],
-        "tags": [
-          "EmployeeService"
-        ]
+          "200": { "description": "Password reset completed" }
+        }
       }
     },
-    "/api/v1/employees/{id}/permissions": {
-      "put": {
-        "summary": "Replace all permissions for an employee",
-        "operationId": "EmployeeService_UpdateEmployeePermissions",
+    "/api/v1/auth/client/login": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Client login",
         "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/v1UpdateEmployeePermissionsResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "type": "string",
-            "format": "uint64"
-          },
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/EmployeeServiceUpdateEmployeePermissionsBody"
-            }
-          }
-        ],
-        "tags": [
-          "EmployeeService"
-        ]
+          "200": { "description": "Client access and refresh tokens issued" }
+        }
+      }
+    },
+    "/api/v1/auth/client/activate": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Complete initial client password setup",
+        "responses": {
+          "200": { "description": "Client account activated" }
+        }
       }
     },
     "/api/v1/permissions": {
       "get": {
-        "summary": "List all available system permissions",
-        "operationId": "EmployeeService_GetAllPermissions",
+        "tags": ["Employees"],
+        "summary": "List available employee permissions",
         "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/v1GetAllPermissionsResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "tags": [
-          "EmployeeService"
-        ]
+          "200": { "description": "Permission list returned" }
+        }
+      }
+    },
+    "/api/v1/employees": {
+      "get": {
+        "tags": ["Employees"],
+        "summary": "List employees",
+        "responses": {
+          "200": { "description": "Employee list returned" }
+        }
+      },
+      "post": {
+        "tags": ["Employees"],
+        "summary": "Create employee",
+        "responses": {
+          "200": { "description": "Employee created" }
+        }
+      }
+    },
+    "/api/v1/employees/{id}": {
+      "get": {
+        "tags": ["Employees"],
+        "summary": "Get employee details",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Employee details returned" }
+        }
+      },
+      "put": {
+        "tags": ["Employees"],
+        "summary": "Update employee",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Employee updated" }
+        }
+      }
+    },
+    "/api/v1/employees/{id}/active": {
+      "patch": {
+        "tags": ["Employees"],
+        "summary": "Activate or deactivate employee",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Employee active status updated" }
+        }
+      }
+    },
+    "/api/v1/employees/{id}/permissions": {
+      "put": {
+        "tags": ["Employees"],
+        "summary": "Update employee permissions",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Employee permissions updated" }
+        }
+      }
+    },
+    "/api/v1/clients": {
+      "get": {
+        "tags": ["Clients"],
+        "summary": "List clients",
+        "responses": {
+          "200": { "description": "Client list returned" }
+        }
+      },
+      "post": {
+        "tags": ["Clients"],
+        "summary": "Create client",
+        "responses": {
+          "200": { "description": "Client created and setup token returned" }
+        }
+      }
+    },
+    "/api/v1/clients/{id}": {
+      "get": {
+        "tags": ["Clients"],
+        "summary": "Get client details",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Client details returned" }
+        }
+      },
+      "put": {
+        "tags": ["Clients"],
+        "summary": "Update client",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Client updated" }
+        }
+      }
+    },
+    "/api/v1/clients/{id}/permissions": {
+      "put": {
+        "tags": ["Clients"],
+        "summary": "Update client permissions",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Client permissions updated" }
+        }
+      }
+    },
+    "/api/v1/firme": {
+      "post": {
+        "tags": ["Accounts"],
+        "summary": "Create firma for a business account",
+        "responses": {
+          "200": { "description": "Firma created" }
+        }
+      }
+    },
+    "/api/v1/sifre-delatnosti": {
+      "get": {
+        "tags": ["Accounts"],
+        "summary": "List sifre delatnosti",
+        "responses": {
+          "200": { "description": "Sifre delatnosti returned" }
+        }
+      }
+    },
+    "/api/v1/currencies": {
+      "get": {
+        "tags": ["Accounts"],
+        "summary": "List active account currencies",
+        "responses": {
+          "200": { "description": "Currencies returned" }
+        }
+      }
+    },
+    "/api/v1/accounts/create": {
+      "post": {
+        "tags": ["Accounts"],
+        "summary": "Create account through the raw HTTP employee flow",
+        "responses": {
+          "200": { "description": "Account created" }
+        }
+      }
+    },
+    "/api/v1/accounts/search": {
+      "get": {
+        "tags": ["Accounts"],
+        "summary": "List and filter accounts for the employee portal",
+        "responses": {
+          "200": { "description": "Filtered account list returned" }
+        }
+      }
+    },
+    "/api/v1/accounts/client/{clientId}": {
+      "get": {
+        "tags": ["Accounts"],
+        "summary": "List client accounts",
+        "parameters": [{ "$ref": "#/components/parameters/ClientIdPath" }],
+        "responses": {
+          "200": { "description": "Client accounts returned" }
+        }
+      }
+    },
+    "/api/v1/accounts/{id}": {
+      "get": {
+        "tags": ["Accounts"],
+        "summary": "Get account details",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Account returned" }
+        }
+      }
+    },
+    "/api/v1/accounts/{id}/name": {
+      "put": {
+        "tags": ["Accounts"],
+        "summary": "Rename account",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Account name updated" }
+        }
+      }
+    },
+    "/api/v1/accounts/{id}/limits": {
+      "put": {
+        "tags": ["Accounts"],
+        "summary": "Update account spending limits",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Account limits updated" }
+        }
+      }
+    },
+    "/api/v1/cards": {
+      "post": {
+        "tags": ["Cards"],
+        "summary": "Issue a new card",
+        "responses": {
+          "200": { "description": "Card created" }
+        }
+      }
+    },
+    "/api/v1/cards/{id}": {
+      "get": {
+        "tags": ["Cards"],
+        "summary": "Get card details",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Card returned" }
+        }
+      }
+    },
+    "/api/v1/cards/account/{accountId}": {
+      "get": {
+        "tags": ["Cards"],
+        "summary": "List cards by account",
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdPath" }],
+        "responses": {
+          "200": { "description": "Account cards returned" }
+        }
+      }
+    },
+    "/api/v1/cards/client/{clientId}": {
+      "get": {
+        "tags": ["Cards"],
+        "summary": "List cards visible to a client",
+        "parameters": [{ "$ref": "#/components/parameters/ClientIdPath" }],
+        "responses": {
+          "200": { "description": "Client cards returned" }
+        }
+      }
+    },
+    "/api/v1/cards/{id}/block": {
+      "put": {
+        "tags": ["Cards"],
+        "summary": "Block card",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Card blocked" }
+        }
+      }
+    },
+    "/api/v1/cards/{id}/unblock": {
+      "put": {
+        "tags": ["Cards"],
+        "summary": "Unblock card",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Card unblocked" }
+        }
+      }
+    },
+    "/api/v1/cards/{id}/deactivate": {
+      "put": {
+        "tags": ["Cards"],
+        "summary": "Deactivate card",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Card deactivated" }
+        }
+      }
+    },
+    "/api/v1/transfers": {
+      "post": {
+        "tags": ["Transfers"],
+        "summary": "Create transfer pending OTP verification",
+        "responses": {
+          "200": { "description": "Transfer created" }
+        }
+      }
+    },
+    "/api/v1/transfers/{id}": {
+      "get": {
+        "tags": ["Transfers"],
+        "summary": "Get transfer details",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Transfer returned" }
+        }
+      }
+    },
+    "/api/v1/transfers/{id}/verify": {
+      "post": {
+        "tags": ["Transfers"],
+        "summary": "Verify pending transfer with OTP",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Transfer verified and executed" }
+        }
+      }
+    },
+    "/api/v1/transfers/client/{clientId}": {
+      "get": {
+        "tags": ["Transfers"],
+        "summary": "List transfers for a client",
+        "parameters": [{ "$ref": "#/components/parameters/ClientIdPath" }],
+        "responses": {
+          "200": { "description": "Client transfers returned" }
+        }
+      }
+    },
+    "/api/v1/transfers/account/{accountId}": {
+      "get": {
+        "tags": ["Transfers"],
+        "summary": "List transfers for an account",
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdPath" }],
+        "responses": {
+          "200": { "description": "Account transfers returned" }
+        }
+      }
+    },
+    "/api/v1/payments": {
+      "post": {
+        "tags": ["Payments"],
+        "summary": "Create payment pending OTP verification",
+        "responses": {
+          "200": { "description": "Payment created" }
+        }
+      }
+    },
+    "/api/v1/payments/{id}": {
+      "get": {
+        "tags": ["Payments"],
+        "summary": "Get payment details",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Payment returned" }
+        }
+      }
+    },
+    "/api/v1/payments/{id}/verify": {
+      "post": {
+        "tags": ["Payments"],
+        "summary": "Verify pending payment with OTP",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Payment verified and executed" }
+        }
+      }
+    },
+    "/api/v1/payments/client/{clientId}": {
+      "get": {
+        "tags": ["Payments"],
+        "summary": "List payments for a client",
+        "parameters": [{ "$ref": "#/components/parameters/ClientIdPath" }],
+        "responses": {
+          "200": { "description": "Client payments returned" }
+        }
+      }
+    },
+    "/api/v1/payments/account/{accountId}": {
+      "get": {
+        "tags": ["Payments"],
+        "summary": "List payments for an account",
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdPath" }],
+        "responses": {
+          "200": { "description": "Account payments returned" }
+        }
+      }
+    },
+    "/api/v1/recipients": {
+      "get": {
+        "tags": ["Recipients"],
+        "summary": "List saved payment recipients",
+        "responses": {
+          "200": { "description": "Recipients returned" }
+        }
+      },
+      "post": {
+        "tags": ["Recipients"],
+        "summary": "Create payment recipient",
+        "responses": {
+          "200": { "description": "Recipient created" }
+        }
+      }
+    },
+    "/api/v1/recipients/{id}": {
+      "put": {
+        "tags": ["Recipients"],
+        "summary": "Update payment recipient",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Recipient updated" }
+        }
+      },
+      "delete": {
+        "tags": ["Recipients"],
+        "summary": "Delete payment recipient",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Recipient deleted" }
+        }
+      }
+    },
+    "/api/v1/exchange/rates": {
+      "get": {
+        "tags": ["Exchange"],
+        "summary": "List exchange rates",
+        "responses": {
+          "200": { "description": "Exchange rates returned" }
+        }
+      }
+    },
+    "/api/v1/exchange/calculate": {
+      "post": {
+        "tags": ["Exchange"],
+        "summary": "Calculate FX conversion",
+        "responses": {
+          "200": { "description": "Conversion result returned" }
+        }
+      }
+    },
+    "/api/v1/loans/request": {
+      "post": {
+        "tags": ["Loans"],
+        "summary": "Submit loan request",
+        "responses": {
+          "201": { "description": "Loan request created" }
+        }
+      }
+    },
+    "/api/v1/loans/requests": {
+      "get": {
+        "tags": ["Loans"],
+        "summary": "List pending loan requests for employees",
+        "responses": {
+          "200": { "description": "Loan requests returned" }
+        }
+      }
+    },
+    "/api/v1/loans/all": {
+      "get": {
+        "tags": ["Loans"],
+        "summary": "List all loans with filters",
+        "responses": {
+          "200": { "description": "Loan list returned" }
+        }
+      }
+    },
+    "/api/v1/loans/client/{clientId}": {
+      "get": {
+        "tags": ["Loans"],
+        "summary": "List loans for a client",
+        "parameters": [{ "$ref": "#/components/parameters/ClientIdPath" }],
+        "responses": {
+          "200": { "description": "Client loans returned" }
+        }
+      }
+    },
+    "/api/v1/loans/{id}": {
+      "get": {
+        "tags": ["Loans"],
+        "summary": "Get loan details",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Loan returned" }
+        }
+      }
+    },
+    "/api/v1/loans/{id}/installments": {
+      "get": {
+        "tags": ["Loans"],
+        "summary": "List loan installments",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Installments returned" }
+        }
+      }
+    },
+    "/api/v1/loans/{id}/approve": {
+      "post": {
+        "tags": ["Loans"],
+        "summary": "Approve loan request and disburse funds",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Loan approved" }
+        }
+      }
+    },
+    "/api/v1/loans/{id}/reject": {
+      "post": {
+        "tags": ["Loans"],
+        "summary": "Reject loan request",
+        "parameters": [{ "$ref": "#/components/parameters/IdPath" }],
+        "responses": {
+          "200": { "description": "Loan rejected" }
+        }
       }
     }
   },
-  "definitions": {
-    "protobufAny": {
-      "type": "object",
-      "properties": {
-        "@type": {
-          "type": "string"
-        }
+  "components": {
+    "parameters": {
+      "IdPath": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "integer" }
       },
-      "additionalProperties": {}
-    },
-    "rpcStatus": {
-      "type": "object",
-      "properties": {
-        "code": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "message": {
-          "type": "string"
-        },
-        "details": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/protobufAny"
-          }
-        }
-      }
-    },
-    "v1ActivateAccountRequest": {
-      "type": "object",
-      "properties": {
-        "token": {
-          "type": "string"
-        },
-        "password": {
-          "type": "string"
-        },
-        "passwordConfirm": {
-          "type": "string"
-        }
-      }
-    },
-    "v1ActivateAccountResponse": {
-      "type": "object",
-      "properties": {
-        "success": {
-          "type": "boolean"
-        },
-        "message": {
-          "type": "string"
-        }
-      }
-    },
-    "v1EmployeeInfo": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "format": "uint64"
-        },
-        "ime": {
-          "type": "string"
-        },
-        "prezime": {
-          "type": "string"
-        },
-        "email": {
-          "type": "string"
-        },
-        "username": {
-          "type": "string"
-        },
-        "pozicija": {
-          "type": "string"
-        },
-        "permissions": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    "v1LoginRequest": {
-      "type": "object",
-      "properties": {
-        "email": {
-          "type": "string"
-        },
-        "password": {
-          "type": "string"
-        }
-      }
-    },
-    "v1LoginResponse": {
-      "type": "object",
-      "properties": {
-        "accessToken": {
-          "type": "string"
-        },
-        "refreshToken": {
-          "type": "string"
-        },
-        "employee": {
-          "$ref": "#/definitions/v1EmployeeInfo"
-        }
-      }
-    },
-    "v1RefreshTokenRequest": {
-      "type": "object",
-      "properties": {
-        "refreshToken": {
-          "type": "string"
-        }
-      }
-    },
-    "v1RefreshTokenResponse": {
-      "type": "object",
-      "properties": {
-        "accessToken": {
-          "type": "string"
-        },
-        "refreshToken": {
-          "type": "string"
-        }
-      }
-    },
-    "v1RequestPasswordResetRequest": {
-      "type": "object",
-      "properties": {
-        "email": {
-          "type": "string"
-        }
-      }
-    },
-    "v1RequestPasswordResetResponse": {
-      "type": "object",
-      "properties": {
-        "success": {
-          "type": "boolean"
-        },
-        "message": {
-          "type": "string"
-        }
-      }
-    },
-    "v1ResetPasswordRequest": {
-      "type": "object",
-      "properties": {
-        "token": {
-          "type": "string"
-        },
-        "password": {
-          "type": "string"
-        },
-        "passwordConfirm": {
-          "type": "string"
-        }
-      }
-    },
-    "v1ResetPasswordResponse": {
-      "type": "object",
-      "properties": {
-        "success": {
-          "type": "boolean"
-        },
-        "message": {
-          "type": "string"
-        }
-      }
-    },
-    "EmployeeServiceSetEmployeeActiveBody": {
-      "type": "object",
-      "properties": {
-        "aktivan": {
-          "type": "boolean"
-        }
-      }
-    },
-    "EmployeeServiceUpdateEmployeeBody": {
-      "type": "object",
-      "properties": {
-        "ime": {
-          "type": "string"
-        },
-        "prezime": {
-          "type": "string"
-        },
-        "datumRodjenja": {
-          "type": "string",
-          "format": "int64"
-        },
-        "pol": {
-          "type": "string"
-        },
-        "email": {
-          "type": "string"
-        },
-        "brojTelefona": {
-          "type": "string"
-        },
-        "adresa": {
-          "type": "string"
-        },
-        "username": {
-          "type": "string"
-        },
-        "pozicija": {
-          "type": "string"
-        },
-        "departman": {
-          "type": "string"
-        },
-        "aktivan": {
-          "type": "boolean"
-        }
+      "ClientIdPath": {
+        "name": "clientId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "integer" }
       },
-      "title": "UpdateEmployee excludes id and password \u2014 enforced at the service layer"
-    },
-    "EmployeeServiceUpdateEmployeePermissionsBody": {
-      "type": "object",
-      "properties": {
-        "permissionNames": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
+      "AccountIdPath": {
+        "name": "accountId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "integer" }
       }
-    },
-    "v1CreateEmployeeRequest": {
-      "type": "object",
-      "properties": {
-        "ime": {
-          "type": "string"
-        },
-        "prezime": {
-          "type": "string"
-        },
-        "datumRodjenja": {
-          "type": "string",
-          "format": "int64",
-          "title": "Unix timestamp"
-        },
-        "pol": {
-          "type": "string"
-        },
-        "email": {
-          "type": "string"
-        },
-        "brojTelefona": {
-          "type": "string"
-        },
-        "adresa": {
-          "type": "string"
-        },
-        "username": {
-          "type": "string"
-        },
-        "pozicija": {
-          "type": "string"
-        },
-        "departman": {
-          "type": "string"
-        },
-        "aktivan": {
-          "type": "boolean",
-          "title": "default true"
-        }
-      }
-    },
-    "v1CreateEmployeeResponse": {
-      "type": "object",
-      "properties": {
-        "employee": {
-          "$ref": "#/definitions/v1EmployeeProto"
-        },
-        "message": {
-          "type": "string"
-        }
-      }
-    },
-    "v1EmployeeListItem": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "format": "uint64"
-        },
-        "ime": {
-          "type": "string"
-        },
-        "prezime": {
-          "type": "string"
-        },
-        "email": {
-          "type": "string"
-        },
-        "pozicija": {
-          "type": "string"
-        },
-        "brojTelefona": {
-          "type": "string"
-        },
-        "aktivan": {
-          "type": "boolean"
-        },
-        "permissionNames": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "title": "Compact view for the employee list table"
-    },
-    "v1EmployeeProto": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "format": "uint64"
-        },
-        "ime": {
-          "type": "string"
-        },
-        "prezime": {
-          "type": "string"
-        },
-        "datumRodjenja": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "pol": {
-          "type": "string"
-        },
-        "email": {
-          "type": "string"
-        },
-        "brojTelefona": {
-          "type": "string"
-        },
-        "adresa": {
-          "type": "string"
-        },
-        "username": {
-          "type": "string"
-        },
-        "pozicija": {
-          "type": "string"
-        },
-        "departman": {
-          "type": "string"
-        },
-        "aktivan": {
-          "type": "boolean"
-        },
-        "permissions": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/v1PermissionProto"
-          }
-        }
-      }
-    },
-    "v1GetAllPermissionsResponse": {
-      "type": "object",
-      "properties": {
-        "permissions": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/v1PermissionProto"
-          }
-        }
-      }
-    },
-    "v1GetEmployeeResponse": {
-      "type": "object",
-      "properties": {
-        "employee": {
-          "$ref": "#/definitions/v1EmployeeProto"
-        }
-      }
-    },
-    "v1ListEmployeesResponse": {
-      "type": "object",
-      "properties": {
-        "employees": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/v1EmployeeListItem"
-          }
-        },
-        "total": {
-          "type": "string",
-          "format": "int64"
-        },
-        "page": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "pageSize": {
-          "type": "integer",
-          "format": "int32"
-        }
-      }
-    },
-    "v1PermissionProto": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "format": "uint64"
-        },
-        "name": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        }
-      }
-    },
-    "v1SetEmployeeActiveResponse": {
-      "type": "object",
-      "properties": {
-        "aktivan": {
-          "type": "boolean"
-        },
-        "message": {
-          "type": "string"
-        }
-      }
-    },
-    "v1UpdateEmployeePermissionsResponse": {
-      "type": "object",
-      "properties": {
-        "permissions": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/v1PermissionProto"
-          }
-        },
-        "message": {
-          "type": "string"
-        }
-      }
-    },
-    "v1UpdateEmployeeResponse": {
-      "type": "object",
-      "properties": {
-        "employee": {
-          "$ref": "#/definitions/v1EmployeeProto"
-        },
-        "message": {
-          "type": "string"
-        }
-      }
-    }
-  },
-  "securityDefinitions": {
-    "Bearer": {
-      "type": "apiKey",
-      "description": "Enter: Bearer <JWT>",
-      "name": "Authorization",
-      "in": "header"
     }
   }
 }

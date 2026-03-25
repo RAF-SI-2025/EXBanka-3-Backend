@@ -45,7 +45,11 @@ func (r *AccountRepository) ListAll(filter models.AccountFilter) ([]models.Accou
 	var accounts []models.Account
 	var total int64
 
-	query := r.db.Model(&models.Account{}).Preload("Currency").Preload("Client").Preload("Firma")
+	query := r.db.Model(&models.Account{}).
+		Joins("LEFT JOIN clients ON clients.id = accounts.client_id").
+		Preload("Currency").
+		Preload("Client").
+		Preload("Firma")
 
 	if filter.Tip != "" {
 		query = query.Where("tip = ?", filter.Tip)
@@ -59,10 +63,15 @@ func (r *AccountRepository) ListAll(filter models.AccountFilter) ([]models.Accou
 	if filter.CurrencyID != nil {
 		query = query.Where("currency_id = ?", *filter.CurrencyID)
 	}
+	if filter.AccountNumber != "" {
+		query = query.Where("accounts.broj_racuna ILIKE ?", "%"+filter.AccountNumber+"%")
+	}
 	if filter.ClientName != "" {
-		query = query.Joins("JOIN clients ON clients.id = accounts.client_id").
-			Where("clients.ime ILIKE ? OR clients.prezime ILIKE ?",
-				"%"+filter.ClientName+"%", "%"+filter.ClientName+"%")
+		query = query.Where(
+			"(clients.ime ILIKE ? OR clients.prezime ILIKE ?)",
+			"%"+filter.ClientName+"%",
+			"%"+filter.ClientName+"%",
+		)
 	}
 
 	if err := query.Count(&total).Error; err != nil {
@@ -79,7 +88,11 @@ func (r *AccountRepository) ListAll(filter models.AccountFilter) ([]models.Accou
 	}
 	offset := (page - 1) * pageSize
 
-	if err := query.Offset(offset).Limit(pageSize).Find(&accounts).Error; err != nil {
+	if err := query.
+		Order("clients.prezime ASC NULLS LAST, clients.ime ASC NULLS LAST, accounts.id ASC").
+		Offset(offset).
+		Limit(pageSize).
+		Find(&accounts).Error; err != nil {
 		return nil, 0, err
 	}
 

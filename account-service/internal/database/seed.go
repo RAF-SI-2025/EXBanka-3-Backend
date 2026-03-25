@@ -40,7 +40,7 @@ func SeedBankAccounts(db *gorm.DB) error {
 	result := db.Where("maticni_broj = ?", firmaData.MaticniBroj).First(&firma)
 	if result.Error == gorm.ErrRecordNotFound {
 		firma = firmaData
-		firma.SifraDelatnostiID = sifra.ID
+		firma.SifraDelatnostiID = &sifra.ID
 		if err := db.Create(&firma).Error; err != nil {
 			return err
 		}
@@ -60,13 +60,13 @@ func SeedBankAccounts(db *gorm.DB) error {
 		if err == gorm.ErrRecordNotFound {
 			brojRacuna := util.GenerateAccountNumber("tekuci", "poslovni")
 			acc := models.Account{
-				BrojRacuna:        brojRacuna,
-				FirmaID:           &firma.ID,
-				CurrencyID:        currency.ID,
-				Tip:               "tekuci",
-				Vrsta:             "poslovni",
-				Naziv:             "EXBanka — " + kod,
-				Status:            "aktivan",
+				BrojRacuna: brojRacuna,
+				FirmaID:    &firma.ID,
+				CurrencyID: currency.ID,
+				Tip:        "tekuci",
+				Vrsta:      "poslovni",
+				Naziv:      "EXBanka — " + kod,
+				Status:     "aktivan",
 			}
 			if err := db.Create(&acc).Error; err != nil {
 				return err

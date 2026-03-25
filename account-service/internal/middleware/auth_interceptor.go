@@ -25,6 +25,7 @@ var clientRequiredPermissions = map[string]string{
 	"/account.v1.AccountService/GetAccount":          models.PermClientBasic,
 	"/account.v1.AccountService/ListClientAccounts":  models.PermClientBasic,
 	"/account.v1.AccountService/UpdateAccountName":   models.PermClientBasic,
+	"/account.v1.AccountService/UpdateAccountLimits": models.PermClientBasic,
 }
 
 type claimsContextKey struct{}

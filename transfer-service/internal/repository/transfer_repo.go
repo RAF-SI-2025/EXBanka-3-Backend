@@ -48,7 +48,7 @@ func (r *TransferRepository) ListByAccountID(accountID uint, filter models.Trans
 	page, pageSize, offset := pagination(filter.Page, filter.PageSize)
 	_ = page
 	if err := query.Offset(offset).Limit(pageSize).
-		Order("vreme_transakcije DESC").
+		Order("vreme_transakcije DESC, id DESC").
 		Find(&transfers).Error; err != nil {
 		return nil, 0, err
 	}
@@ -74,7 +74,7 @@ func (r *TransferRepository) ListByClientID(clientID uint, filter models.Transfe
 	page, pageSize, offset := pagination(filter.Page, filter.PageSize)
 	_ = page
 	if err := query.Offset(offset).Limit(pageSize).
-		Order("transfers.vreme_transakcije DESC").
+		Order("transfers.vreme_transakcije DESC, transfers.id DESC").
 		Find(&transfers).Error; err != nil {
 		return nil, 0, err
 	}

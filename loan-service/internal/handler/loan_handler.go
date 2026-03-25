@@ -7,8 +7,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/config"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/models"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/service"
+	"gorm.io/gorm"
 )
 
 // LoanServiceInterface allows handler tests to inject a mock service.
@@ -26,10 +28,16 @@ type LoanServiceInterface interface {
 
 type LoanHandler struct {
 	svc LoanServiceInterface
+	cfg *config.Config
+	db  *gorm.DB
 }
 
 func NewLoanHandler(svc LoanServiceInterface) *LoanHandler {
 	return &LoanHandler{svc: svc}
+}
+
+func NewLoanHandlerWithConfig(svc LoanServiceInterface, cfg *config.Config, db *gorm.DB) *LoanHandler {
+	return &LoanHandler{svc: svc, cfg: cfg, db: db}
 }
 
 // ServeHTTP routes all /api/v1/loans/... requests.
@@ -82,6 +90,11 @@ func (h *LoanHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *LoanHandler) handleRequest(w http.ResponseWriter, r *http.Request) {
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+
 	var body struct {
 		Vrsta      string  `json:"vrsta"`
 		BrojRacuna string  `json:"broj_racuna"`
@@ -95,6 +108,17 @@ func (h *LoanHandler) handleRequest(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, "invalid request body", http.StatusBadRequest)
 		return
+	}
+	if claims != nil {
+		if body.ClientID != 0 && !requireClientPermissionHTTP(w, claims, body.ClientID) {
+			return
+		}
+		if body.ClientID == 0 {
+			if !requireClientPermissionHTTP(w, claims, claims.ClientID) {
+				return
+			}
+		}
+		body.ClientID = claims.ClientID
 	}
 	loan, err := h.svc.RequestLoan(service.CreateLoanInput{
 		Vrsta:       body.Vrsta,
@@ -120,6 +144,14 @@ func (h *LoanHandler) handleRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *LoanHandler) handleListRequests(w http.ResponseWriter, r *http.Request) {
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireEmployeePermissionHTTP(w, claims, loanPermEmployeeBasic) {
+		return
+	}
+
 	vrsta := r.URL.Query().Get("vrsta")
 	brojRacuna := r.URL.Query().Get("broj_racuna")
 	loans, err := h.svc.ListRequestsFiltered(vrsta, brojRacuna)
@@ -131,6 +163,14 @@ func (h *LoanHandler) handleListRequests(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *LoanHandler) handleListAll(w http.ResponseWriter, r *http.Request) {
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireEmployeePermissionHTTP(w, claims, loanPermEmployeeBasic) {
+		return
+	}
+
 	q := r.URL.Query()
 	filter := service.LoanFilter{
 		Vrsta:      q.Get("vrsta"),
@@ -145,10 +185,21 @@ func (h *LoanHandler) handleListAll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, loans)
 }
 
-func (h *LoanHandler) handleListByClient(w http.ResponseWriter, _ *http.Request, rawID string) {
+func (h *LoanHandler) handleListByClient(w http.ResponseWriter, r *http.Request, rawID string) {
 	clientID, err := parseUint(rawID)
 	if err != nil {
 		jsonError(w, "invalid client id", http.StatusBadRequest)
+		return
+	}
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if claims != nil && (claims.ClientID != 0 || claims.TokenSource == "client") {
+		if !requireClientPermissionHTTP(w, claims, clientID) {
+			return
+		}
+	} else if !requireEmployeePermissionHTTP(w, claims, loanPermEmployeeBasic) {
 		return
 	}
 	loans, err := h.svc.ListByClient(clientID)
@@ -159,10 +210,30 @@ func (h *LoanHandler) handleListByClient(w http.ResponseWriter, _ *http.Request,
 	writeJSON(w, loans)
 }
 
-func (h *LoanHandler) handleGetByID(w http.ResponseWriter, _ *http.Request, rawID string) {
+func (h *LoanHandler) handleGetByID(w http.ResponseWriter, r *http.Request, rawID string) {
 	id, err := parseUint(rawID)
 	if err != nil {
 		jsonError(w, "invalid loan id", http.StatusBadRequest)
+		return
+	}
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if claims != nil && (claims.ClientID != 0 || claims.TokenSource == "client") {
+		if h.db == nil {
+			jsonError(w, "loan ownership check unavailable", http.StatusInternalServerError)
+			return
+		}
+		var loan models.Loan
+		if err := h.db.First(&loan, id).Error; err != nil {
+			jsonError(w, "loan not found", http.StatusNotFound)
+			return
+		}
+		if !requireClientPermissionHTTP(w, claims, loan.ClientID) {
+			return
+		}
+	} else if !requireEmployeePermissionHTTP(w, claims, loanPermEmployeeBasic) {
 		return
 	}
 	loan, err := h.svc.GetByID(id)
@@ -173,10 +244,30 @@ func (h *LoanHandler) handleGetByID(w http.ResponseWriter, _ *http.Request, rawI
 	writeJSON(w, loan)
 }
 
-func (h *LoanHandler) handleListInstallments(w http.ResponseWriter, _ *http.Request, rawID string) {
+func (h *LoanHandler) handleListInstallments(w http.ResponseWriter, r *http.Request, rawID string) {
 	id, err := parseUint(rawID)
 	if err != nil {
 		jsonError(w, "invalid loan id", http.StatusBadRequest)
+		return
+	}
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if claims != nil && (claims.ClientID != 0 || claims.TokenSource == "client") {
+		if h.db == nil {
+			jsonError(w, "loan ownership check unavailable", http.StatusInternalServerError)
+			return
+		}
+		var loan models.Loan
+		if err := h.db.First(&loan, id).Error; err != nil {
+			jsonError(w, "loan not found", http.StatusNotFound)
+			return
+		}
+		if !requireClientPermissionHTTP(w, claims, loan.ClientID) {
+			return
+		}
+	} else if !requireEmployeePermissionHTTP(w, claims, loanPermEmployeeBasic) {
 		return
 	}
 	items, err := h.svc.ListInstallments(id)
@@ -188,6 +279,14 @@ func (h *LoanHandler) handleListInstallments(w http.ResponseWriter, _ *http.Requ
 }
 
 func (h *LoanHandler) handleApprove(w http.ResponseWriter, r *http.Request, rawID string) {
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireEmployeePermissionHTTP(w, claims, loanPermEmployeeBasic) {
+		return
+	}
+
 	id, err := parseUint(rawID)
 	if err != nil {
 		jsonError(w, "invalid loan id", http.StatusBadRequest)
@@ -197,6 +296,13 @@ func (h *LoanHandler) handleApprove(w http.ResponseWriter, r *http.Request, rawI
 		ZaposleniID uint `json:"zaposleni_id"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
+	if claims != nil {
+		if body.ZaposleniID != 0 && body.ZaposleniID != claims.EmployeeID {
+			jsonError(w, "access denied", http.StatusForbidden)
+			return
+		}
+		body.ZaposleniID = claims.EmployeeID
+	}
 
 	loan, err := h.svc.ApproveLoan(id, body.ZaposleniID)
 	if err != nil {
@@ -207,6 +313,14 @@ func (h *LoanHandler) handleApprove(w http.ResponseWriter, r *http.Request, rawI
 }
 
 func (h *LoanHandler) handleReject(w http.ResponseWriter, r *http.Request, rawID string) {
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireEmployeePermissionHTTP(w, claims, loanPermEmployeeBasic) {
+		return
+	}
+
 	id, err := parseUint(rawID)
 	if err != nil {
 		jsonError(w, "invalid loan id", http.StatusBadRequest)
@@ -216,6 +330,13 @@ func (h *LoanHandler) handleReject(w http.ResponseWriter, r *http.Request, rawID
 		ZaposleniID uint `json:"zaposleni_id"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
+	if claims != nil {
+		if body.ZaposleniID != 0 && body.ZaposleniID != claims.EmployeeID {
+			jsonError(w, "access denied", http.StatusForbidden)
+			return
+		}
+		body.ZaposleniID = claims.EmployeeID
+	}
 
 	loan, err := h.svc.RejectLoan(id, body.ZaposleniID)
 	if err != nil {

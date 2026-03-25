@@ -9,6 +9,7 @@ type Client struct {
 	Email        string       `gorm:"uniqueIndex;not null" json:"email"`
 	Password     string       `gorm:"not null" json:"-"`
 	SaltPassword string       `gorm:"not null;column:salt_password" json:"-"`
+	Aktivan      bool         `gorm:"not null;default:false" json:"aktivan"`
 	Permissions  []Permission `gorm:"many2many:client_permissions;" json:"permissions,omitempty"`
 	CreatedAt    time.Time    `json:"created_at"`
 	UpdatedAt    time.Time    `json:"updated_at"`

@@ -44,17 +44,17 @@ func NewAccountHandlerWithService(svc AccountServiceInterface) *AccountHandler {
 
 func toAccountProto(a *models.Account) *accountv1.AccountProto {
 	proto := &accountv1.AccountProto{
-		Id:               uint64(a.ID),
-		BrojRacuna:       a.BrojRacuna,
-		CurrencyId:       uint64(a.CurrencyID),
-		Tip:              a.Tip,
-		Vrsta:            a.Vrsta,
-		Stanje:           a.Stanje,
+		Id:                uint64(a.ID),
+		BrojRacuna:        a.BrojRacuna,
+		CurrencyId:        uint64(a.CurrencyID),
+		Tip:               a.Tip,
+		Vrsta:             a.Vrsta,
+		Stanje:            a.Stanje,
 		RaspolozivoStanje: a.RaspolozivoStanje,
-		DnevniLimit:      a.DnevniLimit,
-		MesecniLimit:     a.MesecniLimit,
-		Naziv:            a.Naziv,
-		Status:           a.Status,
+		DnevniLimit:       a.DnevniLimit,
+		MesecniLimit:      a.MesecniLimit,
+		Naziv:             a.Naziv,
+		Status:            a.Status,
 	}
 	if a.ClientID != nil {
 		proto.ClientId = uint64(*a.ClientID)
@@ -113,11 +113,20 @@ func (h *AccountHandler) GetAccount(ctx context.Context, req *accountv1.GetAccou
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "account not found")
 	}
+	if claims, ok := middleware.GetClaimsFromContext(ctx); ok && claims.ClientID != 0 {
+		if acc.ClientID == nil || *acc.ClientID != claims.ClientID {
+			return nil, status.Error(codes.PermissionDenied, "access denied")
+		}
+	}
 
 	return &accountv1.GetAccountResponse{Account: toAccountProto(acc)}, nil
 }
 
 func (h *AccountHandler) ListClientAccounts(ctx context.Context, req *accountv1.ListClientAccountsRequest) (*accountv1.ListAccountsResponse, error) {
+	if claims, ok := middleware.GetClaimsFromContext(ctx); ok && claims.ClientID != 0 && uint(req.ClientId) != claims.ClientID {
+		return nil, status.Error(codes.PermissionDenied, "access denied")
+	}
+
 	accounts, err := h.svc.ListAccountsByClient(uint(req.ClientId))
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list accounts")
@@ -167,6 +176,16 @@ func (h *AccountHandler) ListAllAccounts(ctx context.Context, req *accountv1.Lis
 }
 
 func (h *AccountHandler) UpdateAccountName(ctx context.Context, req *accountv1.UpdateAccountNameRequest) (*accountv1.UpdateAccountNameResponse, error) {
+	if claims, ok := middleware.GetClaimsFromContext(ctx); ok && claims.ClientID != 0 {
+		acc, err := h.svc.GetAccount(uint(req.Id))
+		if err != nil {
+			return nil, status.Errorf(codes.NotFound, "account not found")
+		}
+		if acc.ClientID == nil || *acc.ClientID != claims.ClientID {
+			return nil, status.Error(codes.PermissionDenied, "access denied")
+		}
+	}
+
 	if err := h.svc.UpdateAccountName(uint(req.Id), req.Naziv); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update account name")
 	}

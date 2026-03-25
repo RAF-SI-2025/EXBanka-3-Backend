@@ -38,6 +38,7 @@ func (r *PaymentRepository) ListByAccountID(accountID uint, filter models.Paymen
 		return nil, 0, err
 	}
 
+	query = query.Order("vreme_transakcije DESC").Order("id DESC")
 	query = applyPagination(query, filter.Page, filter.PageSize)
 	var payments []models.Payment
 	if err := query.Find(&payments).Error; err != nil {
@@ -56,6 +57,7 @@ func (r *PaymentRepository) ListByClientID(clientID uint, filter models.PaymentF
 		return nil, 0, err
 	}
 
+	query = query.Order("vreme_transakcije DESC").Order("id DESC")
 	query = applyPagination(query, filter.Page, filter.PageSize)
 	var payments []models.Payment
 	if err := query.Find(&payments).Error; err != nil {

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	paymentv1 "github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/gen/proto/payment/v1"
@@ -95,6 +96,27 @@ func (h *PaymentHandler) CreatePayment(ctx context.Context, req *paymentv1.Creat
 	if req.RacunPrimaocaBroj == "" {
 		return nil, status.Error(codes.InvalidArgument, "racun_primaoca_broj is required")
 	}
+	if claims, ok := middleware.GetClaimsFromContext(ctx); ok {
+		if claims.ClientID == 0 {
+			return nil, status.Error(codes.PermissionDenied, "client access required")
+		}
+		owned, err := h.accountOwnedByClient(uint(req.RacunPosiljaocaId), claims.ClientID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to verify account ownership")
+		}
+		if !owned {
+			return nil, status.Error(codes.PermissionDenied, "access denied")
+		}
+		if req.RecipientId != 0 {
+			ownedRecipient, err := h.recipientOwnedByClient(uint(req.RecipientId), claims.ClientID)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to verify recipient ownership")
+			}
+			if !ownedRecipient {
+				return nil, status.Error(codes.PermissionDenied, "access denied")
+			}
+		}
+	}
 
 	input := service.CreatePaymentInput{
 		RacunPosiljaocaID: uint(req.RacunPosiljaocaId),
@@ -125,15 +147,36 @@ func (h *PaymentHandler) CreatePayment(ctx context.Context, req *paymentv1.Creat
 	}
 
 	return &paymentv1.CreatePaymentResponse{
-		Payment:          toPaymentProto(p),
-		VerificationCode: p.VerifikacioniKod,
-		Message:          "Payment created, awaiting verification",
+		Payment: toPaymentProto(p),
+		Message: "Payment created, verification code sent to email",
 	}, nil
 }
 
 func (h *PaymentHandler) VerifyPayment(ctx context.Context, req *paymentv1.VerifyPaymentRequest) (*paymentv1.VerifyPaymentResponse, error) {
+	if claims, ok := middleware.GetClaimsFromContext(ctx); ok {
+		if claims.ClientID == 0 {
+			return nil, status.Error(codes.PermissionDenied, "client access required")
+		}
+		owned, err := h.paymentOwnedByClient(uint(req.Id), claims.ClientID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to verify payment ownership")
+		}
+		if !owned {
+			return nil, status.Error(codes.PermissionDenied, "access denied")
+		}
+	}
+
 	p, err := h.svc.VerifyPayment(uint(req.Id), req.VerificationCode)
 	if err != nil {
+		var verificationErr *service.PaymentVerificationError
+		if errors.As(err, &verificationErr) {
+			switch verificationErr.Code {
+			case "payment_not_pending", "insufficient_balance", "daily_limit_exceeded", "monthly_limit_exceeded", "unsupported_payment_currency":
+				return nil, status.Errorf(codes.FailedPrecondition, "%s", verificationErr.Message)
+			default:
+				return nil, status.Errorf(codes.InvalidArgument, "%s", verificationErr.Message)
+			}
+		}
 		return nil, status.Errorf(codes.InvalidArgument, "%s", err.Error())
 	}
 
@@ -144,6 +187,19 @@ func (h *PaymentHandler) VerifyPayment(ctx context.Context, req *paymentv1.Verif
 }
 
 func (h *PaymentHandler) GetPayment(ctx context.Context, req *paymentv1.GetPaymentRequest) (*paymentv1.GetPaymentResponse, error) {
+	if claims, ok := middleware.GetClaimsFromContext(ctx); ok {
+		if claims.ClientID == 0 {
+			return nil, status.Error(codes.PermissionDenied, "client access required")
+		}
+		owned, err := h.paymentOwnedByClient(uint(req.Id), claims.ClientID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to verify payment ownership")
+		}
+		if !owned {
+			return nil, status.Error(codes.PermissionDenied, "access denied")
+		}
+	}
+
 	p, err := h.svc.GetPayment(uint(req.Id))
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "payment not found")
@@ -153,6 +209,19 @@ func (h *PaymentHandler) GetPayment(ctx context.Context, req *paymentv1.GetPayme
 }
 
 func (h *PaymentHandler) ListPaymentsByAccount(ctx context.Context, req *paymentv1.ListPaymentsByAccountRequest) (*paymentv1.ListPaymentsResponse, error) {
+	if claims, ok := middleware.GetClaimsFromContext(ctx); ok {
+		if claims.ClientID == 0 {
+			return nil, status.Error(codes.PermissionDenied, "client access required")
+		}
+		owned, err := h.accountOwnedByClient(uint(req.AccountId), claims.ClientID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to verify account ownership")
+		}
+		if !owned {
+			return nil, status.Error(codes.PermissionDenied, "access denied")
+		}
+	}
+
 	filter := parsePaymentFilter(req.Status, req.DateFrom, req.DateTo, req.MinAmount, req.MaxAmount, req.Page, req.PageSize)
 
 	payments, total, err := h.svc.ListPaymentsByAccount(uint(req.AccountId), filter)
@@ -174,6 +243,15 @@ func (h *PaymentHandler) ListPaymentsByAccount(ctx context.Context, req *payment
 }
 
 func (h *PaymentHandler) ListPaymentsByClient(ctx context.Context, req *paymentv1.ListPaymentsByClientRequest) (*paymentv1.ListPaymentsResponse, error) {
+	if claims, ok := middleware.GetClaimsFromContext(ctx); ok {
+		if claims.ClientID == 0 {
+			return nil, status.Error(codes.PermissionDenied, "client access required")
+		}
+		if uint(req.ClientId) != claims.ClientID {
+			return nil, status.Error(codes.PermissionDenied, "access denied")
+		}
+	}
+
 	filter := parsePaymentFilter(req.Status, req.DateFrom, req.DateTo, req.MinAmount, req.MaxAmount, req.Page, req.PageSize)
 
 	payments, total, err := h.svc.ListPaymentsByClient(uint(req.ClientId), filter)
@@ -192,4 +270,43 @@ func (h *PaymentHandler) ListPaymentsByClient(ctx context.Context, req *paymentv
 		Page:     req.Page,
 		PageSize: req.PageSize,
 	}, nil
+}
+
+func (h *PaymentHandler) accountOwnedByClient(accountID, clientID uint) (bool, error) {
+	if h.db == nil {
+		return true, nil
+	}
+
+	var account models.Account
+	if err := h.db.First(&account, accountID).Error; err != nil {
+		return false, err
+	}
+
+	return account.ClientID != nil && *account.ClientID == clientID, nil
+}
+
+func (h *PaymentHandler) recipientOwnedByClient(recipientID, clientID uint) (bool, error) {
+	if h.db == nil {
+		return true, nil
+	}
+
+	var recipient models.PaymentRecipient
+	if err := h.db.First(&recipient, recipientID).Error; err != nil {
+		return false, err
+	}
+
+	return recipient.ClientID == clientID, nil
+}
+
+func (h *PaymentHandler) paymentOwnedByClient(paymentID, clientID uint) (bool, error) {
+	if h.db == nil {
+		return true, nil
+	}
+
+	var payment models.Payment
+	if err := h.db.First(&payment, paymentID).Error; err != nil {
+		return false, err
+	}
+
+	return h.accountOwnedByClient(payment.RacunPosiljaocaID, clientID)
 }

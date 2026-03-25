@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/config"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/models"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/repository"
 	"gorm.io/gorm"
@@ -12,12 +13,14 @@ import (
 type FirmaHandler struct {
 	firmaRepo *repository.FirmaRepository
 	sifraRepo *repository.SifraDelatnostiRepository
+	cfg       *config.Config
 }
 
-func NewFirmaHandler(db *gorm.DB) *FirmaHandler {
+func NewFirmaHandler(db *gorm.DB, cfg *config.Config) *FirmaHandler {
 	return &FirmaHandler{
 		firmaRepo: repository.NewFirmaRepository(db),
 		sifraRepo: repository.NewSifraDelatnostiRepository(db),
+		cfg:       cfg,
 	}
 }
 
@@ -36,6 +39,14 @@ func (h *FirmaHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireEmployeePermissionHTTP(w, claims, models.PermEmployeeBasic) {
+		return
+	}
+
 	var req createFirmaRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
@@ -48,11 +59,13 @@ func (h *FirmaHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	firma := &models.Firma{
-		Naziv:             req.Naziv,
-		MaticniBroj:       req.MaticniBroj,
-		PIB:               req.PIB,
-		SifraDelatnostiID: req.SifraDelatnostiID,
-		Adresa:            req.Adresa,
+		Naziv:       req.Naziv,
+		MaticniBroj: req.MaticniBroj,
+		PIB:         req.PIB,
+		Adresa:      req.Adresa,
+	}
+	if req.SifraDelatnostiID != 0 {
+		firma.SifraDelatnostiID = &req.SifraDelatnostiID
 	}
 	if req.VlasnikID != 0 {
 		firma.VlasnikID = &req.VlasnikID
@@ -72,6 +85,14 @@ func (h *FirmaHandler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *FirmaHandler) ListSifreDelatnosti(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	claims, ok := parseHTTPClaims(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireEmployeePermissionHTTP(w, claims, models.PermEmployeeBasic) {
 		return
 	}
 

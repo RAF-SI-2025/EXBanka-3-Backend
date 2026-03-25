@@ -113,7 +113,7 @@ func TestCreateClient_Success(t *testing.T) {
 	}
 	svc := newTestClientService(clientRepo, &mockPermRepo{})
 
-	got, err := svc.CreateClient(validCreateClientInput())
+	got, setupToken, err := svc.CreateClient(validCreateClientInput())
 	if err != nil {
 		t.Fatalf("CreateClient() unexpected error: %v", err)
 	}
@@ -123,6 +123,18 @@ func TestCreateClient_Success(t *testing.T) {
 	if got.ID != 7 {
 		t.Errorf("CreateClient() client.ID = %d, want 7", got.ID)
 	}
+	if got.Password == "" || got.Password == "pending" {
+		t.Error("CreateClient() did not store a secure placeholder password")
+	}
+	if got.SaltPassword == "" || got.SaltPassword == "pending" {
+		t.Error("CreateClient() did not store a secure password salt")
+	}
+	if got.Aktivan {
+		t.Error("CreateClient() should create inactive clients until password setup")
+	}
+	if setupToken == "" {
+		t.Error("CreateClient() did not return a setup token")
+	}
 }
 
 func TestCreateClient_DuplicateEmail(t *testing.T) {
@@ -131,7 +143,7 @@ func TestCreateClient_DuplicateEmail(t *testing.T) {
 	}
 	svc := newTestClientService(clientRepo, &mockPermRepo{})
 
-	_, err := svc.CreateClient(validCreateClientInput())
+	_, _, err := svc.CreateClient(validCreateClientInput())
 	if err == nil {
 		t.Fatal("CreateClient() expected error for duplicate email, got nil")
 	}
@@ -146,7 +158,7 @@ func TestCreateClient_InvalidEmail(t *testing.T) {
 	input := validCreateClientInput()
 	input.Email = "not-an-email" // invalid format
 
-	_, err := svc.CreateClient(input)
+	_, _, err := svc.CreateClient(input)
 	if err == nil {
 		t.Fatal("CreateClient() expected error for invalid email format, got nil")
 	}
@@ -177,13 +189,13 @@ func TestUpdateClient_NotFound(t *testing.T) {
 	svc := newTestClientService(clientRepo, &mockPermRepo{})
 
 	input := service.UpdateClientInput{
-		Ime:          "Ana",
-		Prezime:      "Anic",
+		Ime:           "Ana",
+		Prezime:       "Anic",
 		DatumRodjenja: time.Date(1995, 3, 20, 0, 0, 0, 0, time.UTC).Unix(),
-		Pol:          "F",
-		Email:        "ana@bank.com",
-		BrojTelefona: "0651234567",
-		Adresa:       "Ulica 2",
+		Pol:           "F",
+		Email:         "ana@bank.com",
+		BrojTelefona:  "0651234567",
+		Adresa:        "Ulica 2",
 	}
 
 	_, err := svc.UpdateClient(999, input)
@@ -207,13 +219,13 @@ func TestUpdateClient_DuplicateEmail(t *testing.T) {
 	svc := newTestClientService(clientRepo, &mockPermRepo{})
 
 	input := service.UpdateClientInput{
-		Ime:          "Ana",
-		Prezime:      "Anic",
+		Ime:           "Ana",
+		Prezime:       "Anic",
 		DatumRodjenja: time.Date(1995, 3, 20, 0, 0, 0, 0, time.UTC).Unix(),
-		Pol:          "F",
-		Email:        "different@bank.com", // different from current, triggers EmailExists check
-		BrojTelefona: "0651234567",
-		Adresa:       "Ulica 2",
+		Pol:           "F",
+		Email:         "different@bank.com", // different from current, triggers EmailExists check
+		BrojTelefona:  "0651234567",
+		Adresa:        "Ulica 2",
 	}
 
 	_, err := svc.UpdateClient(4, input)
@@ -245,7 +257,7 @@ func TestCreateClient_AssignsDefaultPermissions(t *testing.T) {
 	}
 	svc := newTestClientService(clientRepo, permRepo)
 
-	_, err := svc.CreateClient(validCreateClientInput())
+	_, _, err := svc.CreateClient(validCreateClientInput())
 	if err != nil {
 		t.Fatalf("CreateClient() unexpected error: %v", err)
 	}
@@ -266,7 +278,7 @@ func TestCreateClient_ReturnsClientWithID(t *testing.T) {
 	}
 	svc := newTestClientService(clientRepo, permRepo)
 
-	got, err := svc.CreateClient(validCreateClientInput())
+	got, _, err := svc.CreateClient(validCreateClientInput())
 	if err != nil {
 		t.Fatalf("CreateClient() unexpected error: %v", err)
 	}
@@ -301,7 +313,7 @@ func TestCreateClient_AccountOpeningFlow(t *testing.T) {
 	}
 	svc := newTestClientService(clientRepo, permRepo)
 
-	got, err := svc.CreateClient(validCreateClientInput())
+	got, _, err := svc.CreateClient(validCreateClientInput())
 	if err != nil {
 		t.Fatalf("CreateClient() unexpected error: %v", err)
 	}
@@ -323,7 +335,7 @@ func TestCreateClient_AcceptsNonBankEmail(t *testing.T) {
 	input := validCreateClientInput()
 	input.Email = "user@gmail.com" // regular non-bank email
 
-	got, err := svc.CreateClient(input)
+	got, _, err := svc.CreateClient(input)
 	if err != nil {
 		t.Fatalf("CreateClient() rejected non-bank email: %v", err)
 	}

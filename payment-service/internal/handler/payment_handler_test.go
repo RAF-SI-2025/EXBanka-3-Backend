@@ -16,16 +16,16 @@ import (
 // --- mock service ---
 
 type mockPaymentSvc struct {
-	created    *models.Payment
-	verified   *models.Payment
-	got        *models.Payment
-	byAccount  []models.Payment
-	byClient   []models.Payment
-	total      int64
-	createErr  error
-	verifyErr  error
-	getErr     error
-	listErr    error
+	created   *models.Payment
+	verified  *models.Payment
+	got       *models.Payment
+	byAccount []models.Payment
+	byClient  []models.Payment
+	total     int64
+	createErr error
+	verifyErr error
+	getErr    error
+	listErr   error
 }
 
 func (m *mockPaymentSvc) CreatePayment(input service.CreatePaymentInput) (*models.Payment, error) {
@@ -75,8 +75,8 @@ func TestCreatePayment_Success(t *testing.T) {
 	if resp.Payment.Id != 1 {
 		t.Errorf("expected ID=1, got %d", resp.Payment.Id)
 	}
-	if resp.VerificationCode != "123456" {
-		t.Errorf("expected VerificationCode=123456, got %s", resp.VerificationCode)
+	if resp.VerificationCode != "" {
+		t.Errorf("expected empty VerificationCode, got %s", resp.VerificationCode)
 	}
 	if resp.Payment.Status != "u_obradi" {
 		t.Errorf("expected status=u_obradi, got %s", resp.Payment.Status)
@@ -138,7 +138,11 @@ func TestVerifyPayment_Success(t *testing.T) {
 }
 
 func TestVerifyPayment_WrongCode_ReturnsInvalidArgument(t *testing.T) {
-	svc := &mockPaymentSvc{verifyErr: errors.New("invalid verification code")}
+	svc := &mockPaymentSvc{verifyErr: &service.PaymentVerificationError{
+		Code:    "invalid_verification_code",
+		Message: "invalid verification code",
+		Status:  "u_obradi",
+	}}
 	h := handler.NewPaymentHandlerWithService(svc)
 
 	_, err := h.VerifyPayment(context.Background(), &paymentv1.VerifyPaymentRequest{
@@ -150,6 +154,26 @@ func TestVerifyPayment_WrongCode_ReturnsInvalidArgument(t *testing.T) {
 	}
 	if st, _ := status.FromError(err); st.Code() != codes.InvalidArgument {
 		t.Errorf("expected InvalidArgument, got %v", st.Code())
+	}
+}
+
+func TestVerifyPayment_InsufficientBalance_ReturnsFailedPrecondition(t *testing.T) {
+	svc := &mockPaymentSvc{verifyErr: &service.PaymentVerificationError{
+		Code:    "insufficient_balance",
+		Message: "insufficient balance",
+		Status:  "stornirano",
+	}}
+	h := handler.NewPaymentHandlerWithService(svc)
+
+	_, err := h.VerifyPayment(context.Background(), &paymentv1.VerifyPaymentRequest{
+		Id: 1, VerificationCode: "123456",
+	})
+
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if st, _ := status.FromError(err); st.Code() != codes.FailedPrecondition {
+		t.Errorf("expected FailedPrecondition, got %v", st.Code())
 	}
 }
 

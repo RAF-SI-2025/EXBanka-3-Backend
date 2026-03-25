@@ -24,6 +24,7 @@ func TestListClientAccountsHTTP_ReturnsDnevnaMesecnaPotrosnja(t *testing.T) {
 		{
 			ID:                1,
 			BrojRacuna:        "000100000000000001",
+			Podvrsta:          "standardni",
 			Stanje:            5000,
 			RaspolozivoStanje: 4500,
 			DnevniLimit:       100000,
@@ -59,6 +60,9 @@ func TestListClientAccountsHTTP_ReturnsDnevnaMesecnaPotrosnja(t *testing.T) {
 	}
 	if _, ok := acc["mesecnaPotrosnja"]; !ok {
 		t.Error("response missing mesecnaPotrosnja field")
+	}
+	if acc["podvrsta"] != "standardni" {
+		t.Errorf("expected podvrsta=standardni, got %v", acc["podvrsta"])
 	}
 	if acc["dnevnaPotrosnja"].(float64) != 300 {
 		t.Errorf("expected dnevnaPotrosnja=300, got %v", acc["dnevnaPotrosnja"])

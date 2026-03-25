@@ -17,7 +17,7 @@ var baseURL string
 func init() {
 	baseURL = os.Getenv("TEST_BASE_URL")
 	if baseURL == "" {
-		baseURL = "http://localhost:8080/api/v1"
+		baseURL = "http://localhost/api/v1"
 	}
 }
 
@@ -59,7 +59,7 @@ func getWithToken(t *testing.T, path, token string) (*http.Response, map[string]
 func TestAuthFlow_LoginSuccess(t *testing.T) {
 	resp, body := postJSON(t, "/auth/login", map[string]string{
 		"email":    "admin@bank.com",
-		"password": "Admin1234",
+		"password": "Admin123!",
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("login expected 200, got %d: %v", resp.StatusCode, body)
@@ -95,7 +95,7 @@ func TestAuthFlow_LoginNonexistentEmail(t *testing.T) {
 func TestAuthFlow_RefreshToken(t *testing.T) {
 	_, loginBody := postJSON(t, "/auth/login", map[string]string{
 		"email":    "admin@bank.com",
-		"password": "Admin1234",
+		"password": "Admin123!",
 	})
 	refreshToken, ok := loginBody["refreshToken"].(string)
 	if !ok || refreshToken == "" {
@@ -149,10 +149,10 @@ func TestAuthFlow_ActivationPasswordPolicy(t *testing.T) {
 
 func TestAuthFlow_RequestPasswordReset_DoesNotRevealEmail(t *testing.T) {
 	// Both existing and non-existing emails should return 200 (no info leakage)
-	resp1, _ := postJSON(t, "/auth/request-reset", map[string]string{
+	resp1, _ := postJSON(t, "/auth/password-reset/request", map[string]string{
 		"email": "admin@bank.com",
 	})
-	resp2, _ := postJSON(t, "/auth/request-reset", map[string]string{
+	resp2, _ := postJSON(t, "/auth/password-reset/request", map[string]string{
 		"email": fmt.Sprintf("nonexistent-%d@bank.com", 99999),
 	})
 	if resp1.StatusCode != resp2.StatusCode {

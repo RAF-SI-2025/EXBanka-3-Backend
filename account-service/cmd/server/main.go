@@ -86,23 +86,30 @@ func main() {
 		os.Exit(1)
 	}
 
-	firmaH := handler.NewFirmaHandler(db)
+	firmaH := handler.NewFirmaHandler(db, cfg)
 	createAccH := handler.NewCreateAccountHTTPHandler(db, cfg)
 
 	accountRepo := repository.NewAccountRepository(db)
-	listClientAccH := handler.NewListClientAccountsHTTPHandler(accountRepo)
+	currencyRepo := repository.NewCurrencyRepository(db)
+	accountNotifSvc := service.NewNotificationService(cfg)
+	accountSvc := service.NewAccountServiceWithRepos(accountRepo, currencyRepo, accountNotifSvc)
+	listClientAccH := handler.NewListClientAccountsHTTPHandlerWithConfig(accountRepo, cfg)
+	listAllAccH := handler.NewListAllAccountsHTTPHandler(accountSvc, cfg)
+	currencyH := handler.NewCurrencyHTTPHandler(currencyRepo, cfg)
 
 	cardRepo := repository.NewCardRepository(db)
 	notifSvc := service.NewNotificationService(cfg)
 	cardSvc := service.NewCardService(cardRepo, accountRepo, notifSvc)
-	cardH := handler.NewCardHTTPHandler(cardSvc)
+	cardH := handler.NewCardHTTPHandlerWithConfig(cardSvc, cfg)
 
 	httpMux := http.NewServeMux()
 	httpMux.HandleFunc("/health", healthCheck)
 	httpMux.Handle("/api/v1/firme", middleware.CORS(http.HandlerFunc(firmaH.Create)))
 	httpMux.Handle("/api/v1/sifre-delatnosti", middleware.CORS(http.HandlerFunc(firmaH.ListSifreDelatnosti)))
 	httpMux.Handle("/api/v1/accounts/create", middleware.CORS(createAccH))
+	httpMux.Handle("/api/v1/accounts/search", middleware.CORS(listAllAccH))
 	httpMux.Handle("/api/v1/accounts/client/", middleware.CORS(listClientAccH))
+	httpMux.Handle("/api/v1/currencies", middleware.CORS(currencyH))
 	httpMux.Handle("/api/v1/cards/", middleware.CORS(cardH))
 	httpMux.Handle("/api/v1/cards", middleware.CORS(cardH))
 	httpMux.Handle("/", middleware.CORS(gwMux))

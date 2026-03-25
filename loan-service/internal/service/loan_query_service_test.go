@@ -15,17 +15,19 @@ type queryLoanRepo struct {
 	saved *models.Loan
 }
 
-func (r *queryLoanRepo) Create(l *models.Loan) error        { r.saved = l; l.ID = 1; return nil }
+func (r *queryLoanRepo) Create(l *models.Loan) error { r.saved = l; l.ID = 1; return nil }
 func (r *queryLoanRepo) FindByID(_ uint) (*models.Loan, error) {
 	if len(r.loans) > 0 {
 		return &r.loans[0], nil
 	}
 	return nil, nil
 }
-func (r *queryLoanRepo) Save(l *models.Loan) error                          { r.saved = l; return nil }
-func (r *queryLoanRepo) ListByClientID(_ uint) ([]models.Loan, error)             { return r.loans, nil }
-func (r *queryLoanRepo) ListByStatus(_ string) ([]models.Loan, error)             { return r.loans, nil }
-func (r *queryLoanRepo) ListFiltered(_ service.LoanFilter) ([]models.Loan, error) { return r.loans, nil }
+func (r *queryLoanRepo) Save(l *models.Loan) error                    { r.saved = l; return nil }
+func (r *queryLoanRepo) ListByClientID(_ uint) ([]models.Loan, error) { return r.loans, nil }
+func (r *queryLoanRepo) ListByStatus(_ string) ([]models.Loan, error) { return r.loans, nil }
+func (r *queryLoanRepo) ListFiltered(_ service.LoanFilter) ([]models.Loan, error) {
+	return r.loans, nil
+}
 
 type queryInstallmentRepo struct {
 	items []models.LoanInstallment
@@ -40,7 +42,7 @@ func (r *queryInstallmentRepo) ListByLoanID(_ uint) ([]models.LoanInstallment, e
 }
 
 func newQuerySvc(loans []models.Loan, installments []models.LoanInstallment) *service.LoanService {
-	return service.NewLoanService(&queryLoanRepo{loans: loans}, &queryInstallmentRepo{items: installments})
+	return service.NewLoanService(nil, &queryLoanRepo{loans: loans}, &queryInstallmentRepo{items: installments}, nil)
 }
 
 // --- ListByClient tests ---

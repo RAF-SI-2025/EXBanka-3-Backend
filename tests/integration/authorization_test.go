@@ -48,7 +48,7 @@ func TestAuthorization_NonAdminBlockedFromCreate(t *testing.T) {
 	// Log in as admin first to get a valid token format reference
 	adminResp, adminBody := postJSON(t, "/auth/login", map[string]string{
 		"email":    "admin@bank.com",
-		"password": "Admin1234",
+		"password": "Admin123!",
 	})
 	if adminResp.StatusCode != http.StatusOK {
 		t.Skipf("admin login failed; skipping authorization check (status %d)", adminResp.StatusCode)
@@ -67,8 +67,8 @@ func TestAuthorization_PublicEndpointsAccessible(t *testing.T) {
 		path   string
 		body   interface{}
 	}{
-		{"POST", "/auth/login", map[string]string{"email": "x@x.com", "password": "wrong"}},
-		{"POST", "/auth/request-reset", map[string]string{"email": "x@x.com"}},
+		{"POST", "/auth/login", map[string]string{"email": "admin@bank.com", "password": "Admin123!"}},
+		{"POST", "/auth/password-reset/request", map[string]string{"email": "x@x.com"}},
 	}
 
 	for _, ep := range publicEndpoints {

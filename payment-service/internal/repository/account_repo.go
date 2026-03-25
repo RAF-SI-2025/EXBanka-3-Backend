@@ -15,7 +15,25 @@ func NewAccountRepository(db *gorm.DB) *AccountRepository {
 
 func (r *AccountRepository) FindByID(id uint) (*models.Account, error) {
 	var account models.Account
-	if err := r.db.First(&account, id).Error; err != nil {
+	if err := r.db.
+		Table("accounts").
+		Select("accounts.*, currencies.kod as currency_kod").
+		Joins("LEFT JOIN currencies ON currencies.id = accounts.currency_id").
+		Where("accounts.id = ?", id).
+		First(&account).Error; err != nil {
+		return nil, err
+	}
+	return &account, nil
+}
+
+func (r *AccountRepository) FindByBrojRacuna(brojRacuna string) (*models.Account, error) {
+	var account models.Account
+	if err := r.db.
+		Table("accounts").
+		Select("accounts.*, currencies.kod as currency_kod").
+		Joins("LEFT JOIN currencies ON currencies.id = accounts.currency_id").
+		Where("accounts.broj_racuna = ?", brojRacuna).
+		First(&account).Error; err != nil {
 		return nil, err
 	}
 	return &account, nil

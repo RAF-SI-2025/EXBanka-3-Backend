@@ -21,6 +21,7 @@ type mockAccountService struct {
 	listClientResult []models.Account
 	listAllResult    []models.Account
 	listAllTotal     int64
+	capturedFilter   models.AccountFilter
 	updateNameErr    error
 	updateLimitsErr  error
 }
@@ -35,6 +36,7 @@ func (m *mockAccountService) ListAccountsByClient(clientID uint) ([]models.Accou
 	return m.listClientResult, nil
 }
 func (m *mockAccountService) ListAllAccounts(filter models.AccountFilter) ([]models.Account, int64, error) {
+	m.capturedFilter = filter
 	return m.listAllResult, m.listAllTotal, nil
 }
 func (m *mockAccountService) UpdateAccountName(id uint, naziv string) error {

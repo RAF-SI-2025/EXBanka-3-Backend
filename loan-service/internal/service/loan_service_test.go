@@ -136,7 +136,7 @@ type mockLoanRepo struct {
 	findErr error
 }
 
-func (m *mockLoanRepo) Create(l *models.Loan) error  { m.saved = l; l.ID = 1; return nil }
+func (m *mockLoanRepo) Create(l *models.Loan) error { m.saved = l; l.ID = 1; return nil }
 func (m *mockLoanRepo) FindByID(id uint) (*models.Loan, error) {
 	if m.findErr != nil {
 		return nil, m.findErr
@@ -146,9 +146,9 @@ func (m *mockLoanRepo) FindByID(id uint) (*models.Loan, error) {
 	}
 	return nil, errors.New("not found")
 }
-func (m *mockLoanRepo) Save(l *models.Loan) error                        { m.saved = l; return nil }
-func (m *mockLoanRepo) ListByClientID(_ uint) ([]models.Loan, error)          { return nil, nil }
-func (m *mockLoanRepo) ListByStatus(_ string) ([]models.Loan, error)          { return nil, nil }
+func (m *mockLoanRepo) Save(l *models.Loan) error                                { m.saved = l; return nil }
+func (m *mockLoanRepo) ListByClientID(_ uint) ([]models.Loan, error)             { return nil, nil }
+func (m *mockLoanRepo) ListByStatus(_ string) ([]models.Loan, error)             { return nil, nil }
 func (m *mockLoanRepo) ListFiltered(_ service.LoanFilter) ([]models.Loan, error) { return nil, nil }
 
 type mockInstallmentRepo struct {
@@ -163,16 +163,51 @@ func (m *mockInstallmentRepo) ListByLoanID(_ uint) ([]models.LoanInstallment, er
 	return m.batch, nil
 }
 
-func newSvc() (*service.LoanService, *mockLoanRepo, *mockInstallmentRepo) {
+type mockAccountRepo struct {
+	account *models.Account
+	err     error
+}
+
+func uintPtr(v uint) *uint { return &v }
+
+func (m *mockAccountRepo) FindByBrojRacuna(_ string) (*models.Account, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.account, nil
+}
+
+func (m *mockAccountRepo) FindByID(_ uint) (*models.Account, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.account, nil
+}
+
+func (m *mockAccountRepo) UpdateFields(_ uint, _ map[string]interface{}) error { return nil }
+
+func newSvc() (*service.LoanService, *mockLoanRepo, *mockInstallmentRepo, *mockAccountRepo) {
 	lr := &mockLoanRepo{}
 	ir := &mockInstallmentRepo{}
-	return service.NewLoanService(lr, ir), lr, ir
+	ar := &mockAccountRepo{
+		account: &models.Account{
+			ID:                1,
+			BrojRacuna:        "160000000000000002",
+			ClientID:          uintPtr(1),
+			CurrencyID:        1,
+			CurrencyKod:       "RSD",
+			Status:            "aktivan",
+			Stanje:            100000,
+			RaspolozivoStanje: 100000,
+		},
+	}
+	return service.NewLoanService(nil, lr, ir, ar), lr, ir, ar
 }
 
 // --- RequestLoan tests ---
 
 func TestRequestLoan_CreatesWithStatusZahtev(t *testing.T) {
-	svc, lr, _ := newSvc()
+	svc, lr, _, _ := newSvc()
 	loan, err := svc.RequestLoan(service.CreateLoanInput{
 		Vrsta: "gotovinski", BrojRacuna: "160000000000000002",
 		Iznos: 100000, Period: 12, TipKamate: "fiksna",
@@ -190,7 +225,7 @@ func TestRequestLoan_CreatesWithStatusZahtev(t *testing.T) {
 }
 
 func TestRequestLoan_CalculatesIznosRate(t *testing.T) {
-	svc, lr, _ := newSvc()
+	svc, lr, _, _ := newSvc()
 	_, err := svc.RequestLoan(service.CreateLoanInput{
 		Vrsta: "gotovinski", BrojRacuna: "160000000000000002",
 		Iznos: 100000, Period: 12, TipKamate: "fiksna",
@@ -205,11 +240,11 @@ func TestRequestLoan_CalculatesIznosRate(t *testing.T) {
 }
 
 func TestRequestLoan_GeneratesBrojKredita(t *testing.T) {
-	svc, lr, _ := newSvc()
+	svc, lr, _, _ := newSvc()
 	_, err := svc.RequestLoan(service.CreateLoanInput{
 		Vrsta: "stambeni", BrojRacuna: "160000000000000002",
 		Iznos: 500000, Period: 120, TipKamate: "varijabilna",
-		ClientID: 2, CurrencyID: 1,
+		ClientID: 1, CurrencyID: 1,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -220,7 +255,7 @@ func TestRequestLoan_GeneratesBrojKredita(t *testing.T) {
 }
 
 func TestRequestLoan_InvalidVrsta_ReturnsError(t *testing.T) {
-	svc, _, _ := newSvc()
+	svc, _, _, _ := newSvc()
 	_, err := svc.RequestLoan(service.CreateLoanInput{
 		Vrsta: "invalid", BrojRacuna: "160000000000000002",
 		Iznos: 100000, Period: 12, TipKamate: "fiksna",
@@ -232,7 +267,7 @@ func TestRequestLoan_InvalidVrsta_ReturnsError(t *testing.T) {
 }
 
 func TestRequestLoan_NegativeAmount_ReturnsError(t *testing.T) {
-	svc, _, _ := newSvc()
+	svc, _, _, _ := newSvc()
 	_, err := svc.RequestLoan(service.CreateLoanInput{
 		Vrsta: "gotovinski", BrojRacuna: "160000000000000002",
 		Iznos: -1000, Period: 12, TipKamate: "fiksna",
@@ -244,7 +279,7 @@ func TestRequestLoan_NegativeAmount_ReturnsError(t *testing.T) {
 }
 
 func TestRequestLoan_ZeroPeriod_ReturnsError(t *testing.T) {
-	svc, _, _ := newSvc()
+	svc, _, _, _ := newSvc()
 	_, err := svc.RequestLoan(service.CreateLoanInput{
 		Vrsta: "gotovinski", BrojRacuna: "160000000000000002",
 		Iznos: 100000, Period: 0, TipKamate: "fiksna",
@@ -256,7 +291,7 @@ func TestRequestLoan_ZeroPeriod_ReturnsError(t *testing.T) {
 }
 
 func TestRequestLoan_InvalidTipKamate_ReturnsError(t *testing.T) {
-	svc, _, _ := newSvc()
+	svc, _, _, _ := newSvc()
 	_, err := svc.RequestLoan(service.CreateLoanInput{
 		Vrsta: "gotovinski", BrojRacuna: "160000000000000002",
 		Iznos: 100000, Period: 12, TipKamate: "nepoznata",
@@ -267,10 +302,39 @@ func TestRequestLoan_InvalidTipKamate_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestRequestLoan_RejectsAccountOwnedByAnotherClient(t *testing.T) {
+	svc, _, _, ar := newSvc()
+	ar.account.ClientID = uintPtr(2)
+
+	_, err := svc.RequestLoan(service.CreateLoanInput{
+		Vrsta: "gotovinski", BrojRacuna: "160000000000000002",
+		Iznos: 100000, Period: 12, TipKamate: "fiksna",
+		ClientID: 1, CurrencyID: 1,
+	})
+	if err == nil {
+		t.Fatal("expected error for foreign payout account")
+	}
+}
+
+func TestRequestLoan_RejectsNonRSDAccount(t *testing.T) {
+	svc, _, _, ar := newSvc()
+	ar.account.CurrencyKod = "EUR"
+	ar.account.CurrencyID = 2
+
+	_, err := svc.RequestLoan(service.CreateLoanInput{
+		Vrsta: "gotovinski", BrojRacuna: "160000000000000002",
+		Iznos: 100000, Period: 12, TipKamate: "fiksna",
+		ClientID: 1, CurrencyID: 2,
+	})
+	if err == nil {
+		t.Fatal("expected error for non-RSD payout account")
+	}
+}
+
 // --- ApproveLoan tests ---
 
 func TestApproveLoan_SetsStatusAktivan(t *testing.T) {
-	svc, lr, _ := newSvc()
+	svc, lr, _, _ := newSvc()
 	lr.saved = &models.Loan{
 		ID: 1, Status: "zahtev", Iznos: 100000, Period: 12,
 		KamatnaStopa: 8.0, TipKamate: "fiksna", IznosRate: 8698,
@@ -285,7 +349,7 @@ func TestApproveLoan_SetsStatusAktivan(t *testing.T) {
 }
 
 func TestApproveLoan_SetsZaposleniID(t *testing.T) {
-	svc, lr, _ := newSvc()
+	svc, lr, _, _ := newSvc()
 	lr.saved = &models.Loan{
 		ID: 1, Status: "zahtev", Iznos: 100000, Period: 12,
 		KamatnaStopa: 8.0, TipKamate: "fiksna", IznosRate: 8698,
@@ -300,7 +364,7 @@ func TestApproveLoan_SetsZaposleniID(t *testing.T) {
 }
 
 func TestApproveLoan_GeneratesInstallments(t *testing.T) {
-	svc, lr, ir := newSvc()
+	svc, lr, ir, _ := newSvc()
 	lr.saved = &models.Loan{
 		ID: 1, Status: "zahtev", Iznos: 100000, Period: 12,
 		KamatnaStopa: 8.0, TipKamate: "fiksna", IznosRate: 8698,
@@ -315,7 +379,7 @@ func TestApproveLoan_GeneratesInstallments(t *testing.T) {
 }
 
 func TestApproveLoan_InstallmentsHaveCorrectRedniBroj(t *testing.T) {
-	svc, lr, ir := newSvc()
+	svc, lr, ir, _ := newSvc()
 	lr.saved = &models.Loan{
 		ID: 1, Status: "zahtev", Iznos: 60000, Period: 6,
 		KamatnaStopa: 6.0, TipKamate: "fiksna", IznosRate: 10200,
@@ -332,7 +396,7 @@ func TestApproveLoan_InstallmentsHaveCorrectRedniBroj(t *testing.T) {
 }
 
 func TestApproveLoan_InstallmentsStatusIsOcekuje(t *testing.T) {
-	svc, lr, ir := newSvc()
+	svc, lr, ir, _ := newSvc()
 	lr.saved = &models.Loan{
 		ID: 1, Status: "zahtev", Iznos: 60000, Period: 3,
 		KamatnaStopa: 6.0, TipKamate: "fiksna", IznosRate: 20300,
@@ -349,7 +413,7 @@ func TestApproveLoan_InstallmentsStatusIsOcekuje(t *testing.T) {
 }
 
 func TestApproveLoan_NotZahtev_ReturnsError(t *testing.T) {
-	svc, lr, _ := newSvc()
+	svc, lr, _, _ := newSvc()
 	lr.saved = &models.Loan{ID: 1, Status: "aktivan"}
 	_, err := svc.ApproveLoan(1, 42)
 	if err == nil {
@@ -360,7 +424,7 @@ func TestApproveLoan_NotZahtev_ReturnsError(t *testing.T) {
 // --- RejectLoan tests ---
 
 func TestRejectLoan_SetsStatusOdbijen(t *testing.T) {
-	svc, lr, _ := newSvc()
+	svc, lr, _, _ := newSvc()
 	lr.saved = &models.Loan{ID: 1, Status: "zahtev"}
 	loan, err := svc.RejectLoan(1, 42)
 	if err != nil {
@@ -372,7 +436,7 @@ func TestRejectLoan_SetsStatusOdbijen(t *testing.T) {
 }
 
 func TestRejectLoan_SetsZaposleniID(t *testing.T) {
-	svc, lr, _ := newSvc()
+	svc, lr, _, _ := newSvc()
 	lr.saved = &models.Loan{ID: 1, Status: "zahtev"}
 	loan, err := svc.RejectLoan(1, 99)
 	if err != nil {
@@ -384,7 +448,7 @@ func TestRejectLoan_SetsZaposleniID(t *testing.T) {
 }
 
 func TestRejectLoan_NotZahtev_ReturnsError(t *testing.T) {
-	svc, lr, _ := newSvc()
+	svc, lr, _, _ := newSvc()
 	lr.saved = &models.Loan{ID: 1, Status: "odbijen"}
 	_, err := svc.RejectLoan(1, 42)
 	if err == nil {

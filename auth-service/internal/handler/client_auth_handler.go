@@ -24,6 +24,12 @@ type clientLoginRequest struct {
 	Password string `json:"password"`
 }
 
+type clientActivateRequest struct {
+	Token           string `json:"token"`
+	Password        string `json:"password"`
+	PasswordConfirm string `json:"passwordConfirm"`
+}
+
 type clientLoginResponse struct {
 	AccessToken  string     `json:"accessToken"`
 	RefreshToken string     `json:"refreshToken"`
@@ -72,4 +78,29 @@ func (h *ClientAuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *ClientAuthHandler) Activate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req clientActivateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := h.svc.ActivateClientAccount(req.Token, req.Password, req.PasswordConfirm); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "Client account activated successfully",
+	})
 }
