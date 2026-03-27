@@ -100,6 +100,10 @@ func (c *InstallmentCollector) collectOne(inst *models.LoanInstallment) error {
 						loan.KamatnaStopa += latePenaltyRate
 						loan.IznosRate = annuity(loan.Iznos, loan.KamatnaStopa, loan.Period)
 						tx.Save(&loan)
+						// Reset the late clock so the next penalty doesn't fire until another 72h passes.
+						penaltyNow := time.Now().UTC()
+						currentInst.DatumKasnjenja = &penaltyNow
+						tx.Save(&currentInst)
 						slog.Warn("Late penalty applied", "loan_id", loan.ID, "new_rate", loan.KamatnaStopa)
 					}
 				}
@@ -159,6 +163,9 @@ func (c *InstallmentCollector) collectOne(inst *models.LoanInstallment) error {
 			loan.KamatnaStopa += latePenaltyRate
 			loan.IznosRate = annuity(loan.Iznos, loan.KamatnaStopa, loan.Period)
 			_ = c.loanRepo.SaveLoan(loan)
+			// Reset the late clock so the next penalty doesn't fire until another 72h passes.
+			penaltyNow := time.Now().UTC()
+			inst.DatumKasnjenja = &penaltyNow
 			slog.Warn("Late penalty applied", "loan_id", loan.ID, "new_rate", loan.KamatnaStopa)
 		}
 		return c.repo.Save(inst)
@@ -232,14 +239,15 @@ type loanRepo interface {
 // InterestRateUpdater applies a monthly EURIBOR-style random adjustment to variable loans.
 type InterestRateUpdater struct {
 	repo loanRepo
+	db   *gorm.DB
 }
 
-func NewInterestRateUpdater(repo loanRepo) *InterestRateUpdater {
-	return &InterestRateUpdater{repo: repo}
+func NewInterestRateUpdater(repo loanRepo, db *gorm.DB) *InterestRateUpdater {
+	return &InterestRateUpdater{repo: repo, db: db}
 }
 
 // Run adjusts each variable-rate loan's interest rate by a random delta in [-1.5%, +1.5%],
-// recalculates the monthly installment, and saves.
+// recalculates the monthly installment, and updates pending installments in the schedule.
 func (u *InterestRateUpdater) Run() error {
 	loans, err := u.repo.FindActiveVariableLoans()
 	if err != nil {
@@ -250,7 +258,7 @@ func (u *InterestRateUpdater) Run() error {
 		loan := &loans[i]
 
 		// Random delta in [-1.5, +1.5] percent.
-		delta := (rand.Float64()*3.0 - 1.5) // [-1.5, +1.5]
+		delta := rand.Float64()*3.0 - 1.5
 		newRate := math.Max(0, loan.KamatnaStopa+delta)
 		loan.KamatnaStopa = newRate
 		loan.IznosRate = annuity(loan.Iznos, newRate, loan.Period)
@@ -259,7 +267,18 @@ func (u *InterestRateUpdater) Run() error {
 			slog.Error("Failed to save loan after rate update", "id", loan.ID, "error", err)
 			continue
 		}
-		slog.Info("Interest rate updated", "loan_id", loan.ID, "delta", delta, "new_rate", newRate)
+
+		// Update all pending installments with the new amount so the daily
+		// collection cron picks up the correct value.
+		if u.db != nil {
+			if err := u.db.Model(&models.LoanInstallment{}).
+				Where("loan_id = ? AND status = ?", loan.ID, "ocekuje").
+				Update("iznos", loan.IznosRate).Error; err != nil {
+				slog.Error("Failed to update installment amounts after rate change", "loan_id", loan.ID, "error", err)
+			}
+		}
+
+		slog.Info("Interest rate updated", "loan_id", loan.ID, "delta", delta, "new_rate", newRate, "new_iznos_rate", loan.IznosRate)
 	}
 
 	slog.Info("Interest rate update run complete", "updated", len(loans))

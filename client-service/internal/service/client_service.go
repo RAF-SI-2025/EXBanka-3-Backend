@@ -16,6 +16,7 @@ type ClientService struct {
 	cfg        *config.Config
 	clientRepo repository.ClientRepositoryInterface
 	permRepo   repository.PermissionRepositoryInterface
+	notifier   *NotificationService
 }
 
 const clientSetupTokenDurationHours = 24
@@ -25,6 +26,7 @@ func NewClientService(cfg *config.Config, db *gorm.DB) *ClientService {
 		cfg:        cfg,
 		clientRepo: repository.NewClientRepository(db),
 		permRepo:   repository.NewPermissionRepository(db),
+		notifier:   NewNotificationService(cfg),
 	}
 }
 
@@ -126,6 +128,13 @@ func (s *ClientService) CreateClient(input CreateClientInput) (*models.Client, s
 	setupToken, err := util.GenerateClientSetupToken(client.ID, client.Email, s.cfg.JWTSecret, clientSetupTokenDurationHours)
 	if err != nil {
 		return nil, "", err
+	}
+
+	if s.notifier != nil {
+		fullName := input.Ime + " " + input.Prezime
+		if emailErr := s.notifier.SendActivationEmail(client.Email, fullName, setupToken); emailErr != nil {
+			slog.Warn("activation email failed to send", "client_id", client.ID, "error", emailErr)
+		}
 	}
 
 	return client, setupToken, nil

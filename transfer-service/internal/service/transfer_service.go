@@ -3,7 +3,6 @@ package service
 import (
 	"fmt"
 	"math"
-	"math/rand"
 	"strings"
 	"time"
 
@@ -35,6 +34,7 @@ func (e *TransferVerificationError) Error() string {
 type AccountRepositoryInterface interface {
 	FindByID(id uint) (*models.Account, error)
 	UpdateFields(id uint, fields map[string]interface{}) error
+	FindBankAccountByCurrency(currencyKod string) (*models.Account, error)
 }
 
 // TransferRepositoryInterface defined here to avoid circular imports.
@@ -116,37 +116,73 @@ func (s *TransferService) PreviewTransfer(input CreateTransferInput) (*TransferP
 }
 
 func (s *TransferService) CreateTransfer(input CreateTransferInput) (*models.Transfer, error) {
-	preview, sender, _, err := s.prepareTransfer(input)
+	preview, sender, receiver, err := s.prepareTransfer(input)
 	if err != nil {
 		return nil, err
 	}
 
-	code := fmt.Sprintf("%06d", rand.Intn(1_000_000))
-	expiresAt := time.Now().UTC().Add(verificationCodeTTL)
-
 	transfer := &models.Transfer{
-		RacunPosiljaocaID:     input.RacunPosiljaocaID,
-		RacunPrimaocaID:       input.RacunPrimaocaID,
-		Iznos:                 input.Iznos,
-		ValutaIznosa:          preview.ValutaIznosa,
-		KonvertovaniIznos:     preview.KonvertovaniIznos,
-		Kurs:                  preview.Kurs,
-		Provizija:             preview.Provizija,
-		ProvizijaProcent:      preview.ProvizijaProcent,
-		Svrha:                 input.Svrha,
-		Status:                transferStatusPending,
-		VerifikacioniKod:      code,
-		VerificationExpiresAt: &expiresAt,
-		VremeTransakcije:      time.Now().UTC(),
+		RacunPosiljaocaID: input.RacunPosiljaocaID,
+		RacunPrimaocaID:   input.RacunPrimaocaID,
+		Iznos:             input.Iznos,
+		ValutaIznosa:      preview.ValutaIznosa,
+		KonvertovaniIznos: preview.KonvertovaniIznos,
+		Kurs:              preview.Kurs,
+		Provizija:         preview.Provizija,
+		ProvizijaProcent:  preview.ProvizijaProcent,
+		Svrha:             input.Svrha,
+		Status:            transferStatusPending,
+		VremeTransakcije:  time.Now().UTC(),
 	}
 
 	if err := s.transferRepo.Create(transfer); err != nil {
 		return nil, fmt.Errorf("failed to save transfer: %w", err)
 	}
 
-	if err := s.sendVerificationCode(sender, transfer); err != nil {
-		s.cancelTransfer(transfer)
-		return nil, err
+	ukupnoZaSkidanje := transfer.Iznos + transfer.Provizija
+	if err := s.accountRepo.UpdateFields(sender.ID, map[string]interface{}{
+		"stanje":             sender.Stanje - ukupnoZaSkidanje,
+		"raspolozivo_stanje": sender.RaspolozivoStanje - ukupnoZaSkidanje,
+		"dnevna_potrosnja":   sender.DnevnaPotrosnja + transfer.Iznos,
+		"mesecna_potrosnja":  sender.MesecnaPotrosnja + transfer.Iznos,
+	}); err != nil {
+		return nil, fmt.Errorf("failed to update sender balance: %w", err)
+	}
+
+	if sender.CurrencyID != receiver.CurrencyID {
+		bankFrom, err := s.accountRepo.FindBankAccountByCurrency(sender.Currency.Kod)
+		if err != nil {
+			return nil, fmt.Errorf("bank account for currency %s not found: %w", sender.Currency.Kod, err)
+		}
+		bankTo, err := s.accountRepo.FindBankAccountByCurrency(receiver.Currency.Kod)
+		if err != nil {
+			return nil, fmt.Errorf("bank account for currency %s not found: %w", receiver.Currency.Kod, err)
+		}
+		if err := s.accountRepo.UpdateFields(bankFrom.ID, map[string]interface{}{
+			"stanje":             bankFrom.Stanje + ukupnoZaSkidanje,
+			"raspolozivo_stanje": bankFrom.RaspolozivoStanje + ukupnoZaSkidanje,
+		}); err != nil {
+			return nil, fmt.Errorf("failed to update bank from-currency account: %w", err)
+		}
+		if err := s.accountRepo.UpdateFields(bankTo.ID, map[string]interface{}{
+			"stanje":             bankTo.Stanje - transfer.KonvertovaniIznos,
+			"raspolozivo_stanje": bankTo.RaspolozivoStanje - transfer.KonvertovaniIznos,
+		}); err != nil {
+			return nil, fmt.Errorf("failed to update bank to-currency account: %w", err)
+		}
+	}
+
+	if err := s.accountRepo.UpdateFields(receiver.ID, map[string]interface{}{
+		"stanje":             receiver.Stanje + transfer.KonvertovaniIznos,
+		"raspolozivo_stanje": receiver.RaspolozivoStanje + transfer.KonvertovaniIznos,
+	}); err != nil {
+		return nil, fmt.Errorf("failed to update receiver balance: %w", err)
+	}
+
+	transfer.Status = transferStatusCompleted
+	transfer.VremeTransakcije = time.Now().UTC()
+	if err := s.transferRepo.Save(transfer); err != nil {
+		return nil, fmt.Errorf("failed to save transfer: %w", err)
 	}
 
 	return transfer, nil
@@ -250,6 +286,33 @@ func (s *TransferService) VerifyTransfer(transferID uint, verificationCode strin
 		"mesecna_potrosnja":  sender.MesecnaPotrosnja + transfer.Iznos,
 	}); err != nil {
 		return nil, fmt.Errorf("failed to update sender balance: %w", err)
+	}
+
+	// For cross-currency transfers, route through the bank's own accounts (menjačnica):
+	// the full sender deduction (amount + commission) is credited to the bank's account
+	// in the sender's currency, and the converted amount is debited from the bank's
+	// account in the receiver's currency.
+	if sender.CurrencyID != receiver.CurrencyID {
+		bankFrom, err := s.accountRepo.FindBankAccountByCurrency(sender.Currency.Kod)
+		if err != nil {
+			return nil, fmt.Errorf("bank account for currency %s not found: %w", sender.Currency.Kod, err)
+		}
+		bankTo, err := s.accountRepo.FindBankAccountByCurrency(receiver.Currency.Kod)
+		if err != nil {
+			return nil, fmt.Errorf("bank account for currency %s not found: %w", receiver.Currency.Kod, err)
+		}
+		if err := s.accountRepo.UpdateFields(bankFrom.ID, map[string]interface{}{
+			"stanje":             bankFrom.Stanje + ukupnoZaSkidanje,
+			"raspolozivo_stanje": bankFrom.RaspolozivoStanje + ukupnoZaSkidanje,
+		}); err != nil {
+			return nil, fmt.Errorf("failed to update bank from-currency account: %w", err)
+		}
+		if err := s.accountRepo.UpdateFields(bankTo.ID, map[string]interface{}{
+			"stanje":             bankTo.Stanje - transfer.KonvertovaniIznos,
+			"raspolozivo_stanje": bankTo.RaspolozivoStanje - transfer.KonvertovaniIznos,
+		}); err != nil {
+			return nil, fmt.Errorf("failed to update bank to-currency account: %w", err)
+		}
 	}
 
 	if err := s.accountRepo.UpdateFields(receiver.ID, map[string]interface{}{

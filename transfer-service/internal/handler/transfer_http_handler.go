@@ -104,7 +104,7 @@ func (h *TransferHTTPHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"transfer": toTransferHTTPJSON(transfer),
-		"message":  "Transfer created successfully. Verification code sent to email.",
+		"message":  "Transfer uspešno realizovan.",
 	})
 }
 

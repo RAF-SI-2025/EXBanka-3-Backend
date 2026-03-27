@@ -189,7 +189,7 @@ func (h *CreatePaymentHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"payment": toPaymentHTTPJSON(payment),
-		"message": "Payment created, verification code sent to email",
+		"message": "Payment created, please approve it via the mobile app",
 	})
 }
 

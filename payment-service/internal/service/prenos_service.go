@@ -92,24 +92,6 @@ func (s *PrenosService) CreatePrenos(input CreatePrenosInput) (*models.Payment, 
 		return nil, fmt.Errorf("failed to create prenos: %w", err)
 	}
 
-	if s.notifier != nil {
-		if strings.TrimSpace(input.ClientEmail) == "" {
-			s.cancelPrenos(payment)
-			return nil, fmt.Errorf("client email required for prenos verification")
-		}
-		if err := s.notifier.SendVerificationCode(
-			input.ClientEmail,
-			input.ClientName,
-			code,
-			input.Iznos,
-			input.Svrha,
-			payment.RacunPrimaocaBroj,
-		); err != nil {
-			s.cancelPrenos(payment)
-			return nil, fmt.Errorf("failed to deliver verification code: %w", err)
-		}
-	}
-
 	return payment, nil
 }
 

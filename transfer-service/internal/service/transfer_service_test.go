@@ -34,6 +34,18 @@ func (m *mockAccountRepo) UpdateFields(id uint, fields map[string]interface{}) e
 	return nil
 }
 
+func (m *mockAccountRepo) FindBankAccountByCurrency(currencyKod string) (*models.Account, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &models.Account{
+		ID:                9000,
+		Stanje:            10_000_000,
+		RaspolozivoStanje: 10_000_000,
+		Currency:          models.Currency{Kod: currencyKod},
+	}, nil
+}
+
 type mockTransferRepo struct {
 	created               *models.Transfer
 	listByAccountResult   []models.Transfer
@@ -120,6 +132,15 @@ func (r *captureAccountRepo) FindByID(id uint) (*models.Account, error) {
 func (r *captureAccountRepo) UpdateFields(id uint, fields map[string]interface{}) error {
 	r.updates[id] = fields
 	return nil
+}
+
+func (r *captureAccountRepo) FindBankAccountByCurrency(currencyKod string) (*models.Account, error) {
+	return &models.Account{
+		ID:                9000,
+		Stanje:            10_000_000,
+		RaspolozivoStanje: 10_000_000,
+		Currency:          models.Currency{Kod: currencyKod},
+	}, nil
 }
 
 func eurAccount(id uint, balance float64) *models.Account {

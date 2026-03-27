@@ -39,6 +39,14 @@ func (r *CardRepository) CountByClientAndAccount(clientID, accountID uint) (int6
 	return count, err
 }
 
+func (r *CardRepository) CountByOvlascenoLice(ovlascenoLiceID uint) (int64, error) {
+	var count int64
+	err := r.db.Model(&models.Card{}).
+		Where("ovlasceno_lice_id = ?", ovlascenoLiceID).
+		Count(&count).Error
+	return count, err
+}
+
 func (r *CardRepository) ListByAccountID(accountID uint) ([]models.Card, error) {
 	var cards []models.Card
 	err := r.db.Where("account_id = ?", accountID).Find(&cards).Error

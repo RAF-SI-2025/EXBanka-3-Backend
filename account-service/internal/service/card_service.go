@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/models"
@@ -20,6 +21,7 @@ type CardRepositoryInterface interface {
 	FindByID(id uint) (*models.Card, error)
 	CountByAccountID(accountID uint) (int64, error)
 	CountByClientAndAccount(clientID, accountID uint) (int64, error)
+	CountByOvlascenoLice(ovlascenoLiceID uint) (int64, error)
 	ListByAccountID(accountID uint) ([]models.Card, error)
 	ListByClientID(clientID uint) ([]models.Card, error)
 	Save(card *models.Card) error
@@ -27,12 +29,13 @@ type CardRepositoryInterface interface {
 
 // CreateCardInput carries the data needed to issue a new card.
 type CreateCardInput struct {
-	AccountID    uint
-	ClientID     uint
-	VrstaKartice string // visa, mastercard, dinacard, amex
-	NazivKartice string
-	ClientEmail  string
-	ClientName   string
+	AccountID       uint
+	ClientID        uint
+	OvlascenoLiceID *uint // set when card is issued to an authorized person on a poslovni account
+	VrstaKartice    string // visa, mastercard, dinacard, amex
+	NazivKartice    string
+	ClientEmail     string
+	ClientName      string
 }
 
 // CardService handles card creation and status management.
@@ -94,12 +97,24 @@ func (s *CardService) CreateCard(input CreateCardInput) (*models.Card, error) {
 
 	// Enforce card limits.
 	if account.Vrsta == "poslovni" {
-		count, err := s.cardRepo.CountByClientAndAccount(input.ClientID, input.AccountID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to count cards: %w", err)
-		}
-		if count >= 1 {
-			return nil, fmt.Errorf("%w: poslovni account allows max 1 card per person", ErrCardLimitExceeded)
+		if input.OvlascenoLiceID != nil {
+			// Card for authorized person: max 1 card per OvlascenoLice
+			count, err := s.cardRepo.CountByOvlascenoLice(*input.OvlascenoLiceID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to count cards: %w", err)
+			}
+			if count >= 1 {
+				return nil, fmt.Errorf("%w: ovlasceno lice already has a card on this account", ErrCardLimitExceeded)
+			}
+		} else {
+			// Card for account owner: max 1 card per owner on this account
+			count, err := s.cardRepo.CountByClientAndAccount(input.ClientID, input.AccountID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to count cards: %w", err)
+			}
+			if count >= 1 {
+				return nil, fmt.Errorf("%w: poslovni account allows max 1 card per person", ErrCardLimitExceeded)
+			}
 		}
 	} else {
 		// licni (and anything else): max 2 per account
@@ -114,18 +129,16 @@ func (s *CardService) CreateCard(input CreateCardInput) (*models.Card, error) {
 
 	now := time.Now()
 	card := &models.Card{
-		BrojKartice:    util.GenerateCardNumber(input.VrstaKartice),
-		CVV:            util.GenerateCVV(),
-		VrstaKartice:   input.VrstaKartice,
-		NazivKartice:   input.NazivKartice,
-		AccountID:      input.AccountID,
-		ClientID:       input.ClientID,
-		Status:         "aktivna",
-		DatumKreiranja: now,
-		DatumIsteka:    now.AddDate(5, 0, 0),
-	}
-	if account.Vrsta == "poslovni" && account.ClientID != nil && *account.ClientID != input.ClientID {
-		card.OvlascenoLiceID = &input.ClientID
+		BrojKartice:     util.GenerateCardNumber(input.VrstaKartice),
+		CVV:             util.GenerateCVV(),
+		VrstaKartice:    input.VrstaKartice,
+		NazivKartice:    input.NazivKartice,
+		AccountID:       input.AccountID,
+		ClientID:        input.ClientID,
+		OvlascenoLiceID: input.OvlascenoLiceID,
+		Status:          "aktivna",
+		DatumKreiranja:  now,
+		DatumIsteka:     now.AddDate(5, 0, 0),
 	}
 
 	if err := s.cardRepo.Create(card); err != nil {
@@ -255,8 +268,15 @@ func (s *CardService) DeactivateCardWithNotify(cardID uint, notify *CardStatusNo
 }
 
 // sendCardStatusNotification sends email to the card owner and optionally to OvlascenoLice.
+// If notify is nil or has no ClientEmail, it auto-resolves contact info from the DB.
 func (s *CardService) sendCardStatusNotification(card *models.Card, newStatus string, notify *CardStatusNotifyInfo) {
-	if s.notifSvc == nil || notify == nil {
+	if s.notifSvc == nil {
+		return
+	}
+	if notify == nil || notify.ClientEmail == "" {
+		notify = s.lookupNotifyFromDB(card)
+	}
+	if notify == nil {
 		return
 	}
 	if notify.ClientEmail != "" {
@@ -265,6 +285,33 @@ func (s *CardService) sendCardStatusNotification(card *models.Card, newStatus st
 	if notify.OvlascenoLiceEmail != "" {
 		_ = s.notifSvc.SendCardStatusEmail(notify.OvlascenoLiceEmail, notify.OvlascenoLiceName, card.BrojKartice, card.VrstaKartice, newStatus)
 	}
+}
+
+// lookupNotifyFromDB resolves client and ovlasceno lice contact info from the database.
+func (s *CardService) lookupNotifyFromDB(card *models.Card) *CardStatusNotifyInfo {
+	if s.db == nil {
+		return nil
+	}
+	var client struct {
+		Email   string
+		Ime     string
+		Prezime string
+	}
+	if err := s.db.Table("clients").Select("email, ime, prezime").Where("id = ?", card.ClientID).First(&client).Error; err != nil {
+		return nil
+	}
+	info := &CardStatusNotifyInfo{
+		ClientEmail: client.Email,
+		ClientName:  strings.TrimSpace(client.Ime + " " + client.Prezime),
+	}
+	if card.OvlascenoLiceID != nil {
+		var ol models.OvlascenoLice
+		if err := s.db.First(&ol, *card.OvlascenoLiceID).Error; err == nil {
+			info.OvlascenoLiceEmail = ol.Email
+			info.OvlascenoLiceName = strings.TrimSpace(ol.Ime + " " + ol.Prezime)
+		}
+	}
+	return info
 }
 
 // ClientCardRequestInput carries the data for a client-initiated card request.
@@ -398,7 +445,7 @@ func (s *CardService) VerifyCardRequest(requestID uint, code string) (*models.Ca
 		ClientName:   req.ClientName,
 	}
 
-	// For poslovni with OvlascenoLice: create OvlascenoLice first
+	// For poslovni with OvlascenoLice: create OvlascenoLice first, then pass its ID
 	if req.OvlascenoIme != "" {
 		account, _ := s.accountRepo.FindByID(req.AccountID)
 		if account != nil && account.Vrsta == "poslovni" {
@@ -413,6 +460,9 @@ func (s *CardService) VerifyCardRequest(requestID uint, code string) (*models.Ca
 				ol.FirmaID = *account.FirmaID
 			}
 			s.db.Create(&ol)
+			if ol.ID != 0 {
+				createInput.OvlascenoLiceID = &ol.ID
+			}
 		}
 	}
 

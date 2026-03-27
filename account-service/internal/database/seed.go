@@ -60,13 +60,15 @@ func SeedBankAccounts(db *gorm.DB) error {
 		if err == gorm.ErrRecordNotFound {
 			brojRacuna := util.GenerateAccountNumber("tekuci", "poslovni")
 			acc := models.Account{
-				BrojRacuna: brojRacuna,
-				FirmaID:    &firma.ID,
-				CurrencyID: currency.ID,
-				Tip:        "tekuci",
-				Vrsta:      "poslovni",
-				Naziv:      "EXBanka — " + kod,
-				Status:     "aktivan",
+				BrojRacuna:        brojRacuna,
+				FirmaID:           &firma.ID,
+				CurrencyID:        currency.ID,
+				Tip:               "tekuci",
+				Vrsta:             "poslovni",
+				Naziv:             "EXBanka — " + kod,
+				Status:            "aktivan",
+				Stanje:            1_000_000,
+				RaspolozivoStanje: 1_000_000,
 			}
 			if err := db.Create(&acc).Error; err != nil {
 				return err

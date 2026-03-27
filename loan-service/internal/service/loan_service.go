@@ -50,6 +50,7 @@ type LoanService struct {
 	loanRepo        LoanRepositoryInterface
 	installmentRepo InstallmentRepositoryInterface
 	accountRepo     AccountRepositoryInterface
+	notifier        *NotificationService
 }
 
 func NewLoanService(db *gorm.DB, loanRepo LoanRepositoryInterface, installmentRepo InstallmentRepositoryInterface, accountRepo AccountRepositoryInterface) *LoanService {
@@ -58,6 +59,16 @@ func NewLoanService(db *gorm.DB, loanRepo LoanRepositoryInterface, installmentRe
 		loanRepo:        loanRepo,
 		installmentRepo: installmentRepo,
 		accountRepo:     accountRepo,
+	}
+}
+
+func NewLoanServiceWithNotifier(db *gorm.DB, loanRepo LoanRepositoryInterface, installmentRepo InstallmentRepositoryInterface, accountRepo AccountRepositoryInterface, notifier *NotificationService) *LoanService {
+	return &LoanService{
+		db:              db,
+		loanRepo:        loanRepo,
+		installmentRepo: installmentRepo,
+		accountRepo:     accountRepo,
+		notifier:        notifier,
 	}
 }
 
@@ -294,6 +305,7 @@ func (s *LoanService) ApproveLoan(loanID, zaposleniID uint) (*models.Loan, error
 		if err != nil {
 			return nil, err
 		}
+		s.sendLoanApprovedEmail(approved)
 		return approved, nil
 	}
 
@@ -317,7 +329,27 @@ func (s *LoanService) ApproveLoan(loanID, zaposleniID uint) (*models.Loan, error
 		return nil, fmt.Errorf("failed to create installments: %w", err)
 	}
 
+	s.sendLoanApprovedEmail(loan)
 	return loan, nil
+}
+
+func (s *LoanService) sendLoanApprovedEmail(loan *models.Loan) {
+	if s.notifier == nil || s.db == nil {
+		return
+	}
+	var client struct {
+		Email   string
+		Ime     string
+		Prezime string
+	}
+	if err := s.db.Table("clients").Select("email, ime, prezime").Where("id = ?", loan.ClientID).First(&client).Error; err != nil {
+		return
+	}
+	fullName := strings.TrimSpace(client.Ime + " " + client.Prezime)
+	if fullName == "" {
+		fullName = client.Email
+	}
+	_ = s.notifier.SendLoanApprovedEmail(client.Email, fullName, loan.Iznos, loan.Vrsta, loan.Period, loan.IznosRate, loan.KamatnaStopa, loan.BrojKredita)
 }
 
 // RejectLoan rejects a loan request and sets it to "odbijen".

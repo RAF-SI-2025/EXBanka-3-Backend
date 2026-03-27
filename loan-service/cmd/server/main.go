@@ -36,12 +36,13 @@ func main() {
 	loanRepo := repository.NewLoanRepository(db)
 	installmentRepo := repository.NewInstallmentRepository(db)
 	accountRepo := repository.NewAccountRepository(db)
-	loanSvc := service.NewLoanService(db, loanRepo, installmentRepo, accountRepo)
+	notifier := service.NewNotificationService(cfg)
+	loanSvc := service.NewLoanServiceWithNotifier(db, loanRepo, installmentRepo, accountRepo, notifier)
 	loanH := handler.NewLoanHandlerWithConfig(loanSvc, cfg, db)
 
 	// Start cron jobs in the background.
 	go runDailyCron(cron.NewInstallmentCollector(db, installmentRepo, loanRepo, accountRepo))
-	go runMonthlyCron(cron.NewInterestRateUpdater(loanRepo))
+	go runMonthlyCron(cron.NewInterestRateUpdater(loanRepo, db))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthCheck)
