@@ -6,6 +6,7 @@ import (
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/internal/models"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/internal/service"
+	"gorm.io/gorm"
 )
 
 // mockListPaymentRepo supports list/get operations with controllable results.
@@ -60,10 +61,19 @@ type stubAccountRepo struct{}
 func (s *stubAccountRepo) FindByID(id uint) (*models.Account, error) {
 	return &models.Account{ID: id, RaspolozivoStanje: 10000, Stanje: 10000}, nil
 }
+func (s *stubAccountRepo) FindByIDForUpdate(_ *gorm.DB, id uint) (*models.Account, error) {
+	return s.FindByID(id)
+}
 func (s *stubAccountRepo) FindByBrojRacuna(brojRacuna string) (*models.Account, error) {
 	return &models.Account{ID: 1, BrojRacuna: brojRacuna, RaspolozivoStanje: 10000, Stanje: 10000}, nil
 }
+func (s *stubAccountRepo) FindByBrojRacunaForUpdate(_ *gorm.DB, brojRacuna string) (*models.Account, error) {
+	return s.FindByBrojRacuna(brojRacuna)
+}
 func (s *stubAccountRepo) UpdateFields(id uint, fields map[string]interface{}) error { return nil }
+func (s *stubAccountRepo) UpdateFieldsTx(_ *gorm.DB, id uint, fields map[string]interface{}) error {
+	return nil
+}
 
 // --- tests ---
 

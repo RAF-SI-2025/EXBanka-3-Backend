@@ -36,7 +36,7 @@ func NewPaymentHandler(db *gorm.DB, cfg *config.Config) *PaymentHandler {
 	paymentRepo := repository.NewPaymentRepository(db)
 	recipientRepo := repository.NewPaymentRecipientRepository(db)
 	notifSvc := service.NewNotificationService(cfg)
-	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, recipientRepo, notifSvc)
+	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, recipientRepo, notifSvc).WithDB(db)
 	return &PaymentHandler{svc: svc, db: db}
 }
 

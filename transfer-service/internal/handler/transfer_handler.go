@@ -35,7 +35,7 @@ func NewTransferHandler(db *gorm.DB, exchangeServiceURL string, cfg *config.Conf
 	transferRepo := repository.NewTransferRepository(db)
 	exchangeSvc := service.NewHTTPExchangeRateService(exchangeServiceURL)
 	notifier := service.NewNotificationService(cfg)
-	svc := service.NewTransferServiceWithReposAndNotifier(accountRepo, transferRepo, exchangeSvc, notifier)
+	svc := service.NewTransferServiceWithReposAndNotifier(accountRepo, transferRepo, exchangeSvc, notifier).WithDB(db)
 	return &TransferHandler{svc: svc, db: db}
 }
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/transfer-service/internal/models"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/transfer-service/internal/service"
+	"gorm.io/gorm"
 )
 
 // --- mocks ---
@@ -28,10 +29,18 @@ func (m *mockAccountRepo) FindByID(id uint) (*models.Account, error) {
 	return nil, errors.New("account not found")
 }
 
+func (m *mockAccountRepo) FindByIDForUpdate(_ *gorm.DB, id uint) (*models.Account, error) {
+	return m.FindByID(id)
+}
+
 func (m *mockAccountRepo) UpdateFields(id uint, fields map[string]interface{}) error {
 	m.updatedID = id
 	m.updatedFields = fields
 	return nil
+}
+
+func (m *mockAccountRepo) UpdateFieldsTx(_ *gorm.DB, id uint, fields map[string]interface{}) error {
+	return m.UpdateFields(id, fields)
 }
 
 func (m *mockAccountRepo) FindBankAccountByCurrency(currencyKod string) (*models.Account, error) {
@@ -44,6 +53,10 @@ func (m *mockAccountRepo) FindBankAccountByCurrency(currencyKod string) (*models
 		RaspolozivoStanje: 10_000_000,
 		Currency:          models.Currency{Kod: currencyKod},
 	}, nil
+}
+
+func (m *mockAccountRepo) FindBankAccountByCurrencyForUpdate(_ *gorm.DB, currencyKod string) (*models.Account, error) {
+	return m.FindBankAccountByCurrency(currencyKod)
 }
 
 type mockTransferRepo struct {
@@ -82,6 +95,10 @@ type mockExchangeRateService struct {
 }
 
 func (m *mockExchangeRateService) GetRate(from, to string) (float64, error) {
+	return m.rate, m.err
+}
+
+func (m *mockExchangeRateService) GetSellRate(from, to string) (float64, error) {
 	return m.rate, m.err
 }
 
@@ -129,9 +146,17 @@ func (r *captureAccountRepo) FindByID(id uint) (*models.Account, error) {
 	return nil, errors.New("account not found")
 }
 
+func (r *captureAccountRepo) FindByIDForUpdate(_ *gorm.DB, id uint) (*models.Account, error) {
+	return r.FindByID(id)
+}
+
 func (r *captureAccountRepo) UpdateFields(id uint, fields map[string]interface{}) error {
 	r.updates[id] = fields
 	return nil
+}
+
+func (r *captureAccountRepo) UpdateFieldsTx(_ *gorm.DB, id uint, fields map[string]interface{}) error {
+	return r.UpdateFields(id, fields)
 }
 
 func (r *captureAccountRepo) FindBankAccountByCurrency(currencyKod string) (*models.Account, error) {
@@ -141,6 +166,10 @@ func (r *captureAccountRepo) FindBankAccountByCurrency(currencyKod string) (*mod
 		RaspolozivoStanje: 10_000_000,
 		Currency:          models.Currency{Kod: currencyKod},
 	}, nil
+}
+
+func (r *captureAccountRepo) FindBankAccountByCurrencyForUpdate(_ *gorm.DB, currencyKod string) (*models.Account, error) {
+	return r.FindBankAccountByCurrency(currencyKod)
 }
 
 func eurAccount(id uint, balance float64) *models.Account {

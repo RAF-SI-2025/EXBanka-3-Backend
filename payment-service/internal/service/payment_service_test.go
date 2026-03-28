@@ -7,6 +7,7 @@ import (
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/internal/models"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/internal/service"
+	"gorm.io/gorm"
 )
 
 type mockAccountRepo struct {
@@ -49,6 +50,14 @@ func (m *mockAccountRepo) FindByBrojRacuna(brojRacuna string) (*models.Account, 
 	return nil, errors.New("account not found")
 }
 
+func (m *mockAccountRepo) FindByIDForUpdate(_ *gorm.DB, id uint) (*models.Account, error) {
+	return m.FindByID(id)
+}
+
+func (m *mockAccountRepo) FindByBrojRacunaForUpdate(_ *gorm.DB, brojRacuna string) (*models.Account, error) {
+	return m.FindByBrojRacuna(brojRacuna)
+}
+
 func (m *mockAccountRepo) UpdateFields(id uint, fields map[string]interface{}) error {
 	copyFields := make(map[string]interface{}, len(fields))
 	for key, value := range fields {
@@ -75,6 +84,10 @@ func (m *mockAccountRepo) UpdateFields(id uint, fields map[string]interface{}) e
 	}
 
 	return nil
+}
+
+func (m *mockAccountRepo) UpdateFieldsTx(_ *gorm.DB, id uint, fields map[string]interface{}) error {
+	return m.UpdateFields(id, fields)
 }
 
 type mockPaymentRepo struct {

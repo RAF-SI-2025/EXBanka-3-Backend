@@ -1,12 +1,15 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"strings"
 	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/internal/models"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const prenosPaymentCode = "254"
@@ -24,6 +27,7 @@ type PrenosService struct {
 	accountRepo PaymentAccountRepositoryInterface
 	paymentRepo PaymentRepositoryInterface
 	notifier    PaymentNotificationSender
+	db          *gorm.DB
 }
 
 func NewPrenosServiceWithRepos(
@@ -36,6 +40,12 @@ func NewPrenosServiceWithRepos(
 		paymentRepo: paymentRepo,
 		notifier:    notifier,
 	}
+}
+
+// WithDB sets the database handle used for transactional balance settlement.
+func (s *PrenosService) WithDB(db *gorm.DB) *PrenosService {
+	s.db = db
+	return s
 }
 
 func (s *PrenosService) CreatePrenos(input CreatePrenosInput) (*models.Payment, error) {
@@ -146,6 +156,108 @@ func (s *PrenosService) VerifyPrenos(paymentID uint, verificationCode string) (*
 		}
 	}
 
+	return s.settlePrenosTx(payment)
+}
+
+func (s *PrenosService) settlePrenosTx(payment *models.Payment) (*models.Payment, error) {
+	if s.db == nil {
+		return s.settlePrenosNonTx(payment)
+	}
+
+	var result *models.Payment
+	txErr := s.db.Transaction(func(tx *gorm.DB) error {
+		var current models.Payment
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			First(&current, payment.ID).Error; err != nil {
+			return fmt.Errorf("payment not found: %w", err)
+		}
+		if current.Status != paymentStatusPending {
+			return &PaymentVerificationError{
+				Code:    "payment_already_processed",
+				Message: fmt.Sprintf("payment already %s", current.Status),
+				Status:  current.Status,
+			}
+		}
+
+		sender, err := s.accountRepo.FindByIDForUpdate(tx, payment.RacunPosiljaocaID)
+		if err != nil {
+			return fmt.Errorf("sender account not found: %w", err)
+		}
+		receiver, err := s.findReceiverAccountForUpdate(tx, payment)
+		if err != nil {
+			return fmt.Errorf("receiver account not found: %w", err)
+		}
+		if err := validatePrenosAccounts(sender, receiver); err != nil {
+			return &PaymentVerificationError{
+				Code:    "unsupported_prenos_accounts",
+				Message: err.Error(),
+				Status:  paymentStatusCancelled,
+			}
+		}
+
+		if sender.RaspolozivoStanje < payment.Iznos {
+			return &PaymentVerificationError{
+				Code:    "insufficient_balance",
+				Message: fmt.Sprintf("insufficient balance: available %.2f, required %.2f", sender.RaspolozivoStanje, payment.Iznos),
+				Status:  paymentStatusCancelled,
+			}
+		}
+		if sender.DnevnaPotrosnja+payment.Iznos > sender.DnevniLimit {
+			return &PaymentVerificationError{
+				Code:    "daily_limit_exceeded",
+				Message: "daily spending limit exceeded",
+				Status:  paymentStatusCancelled,
+			}
+		}
+		if sender.MesecnaPotrosnja+payment.Iznos > sender.MesecniLimit {
+			return &PaymentVerificationError{
+				Code:    "monthly_limit_exceeded",
+				Message: "monthly spending limit exceeded",
+				Status:  paymentStatusCancelled,
+			}
+		}
+
+		if err := s.accountRepo.UpdateFieldsTx(tx, sender.ID, map[string]interface{}{
+			"stanje":             sender.Stanje - payment.Iznos,
+			"raspolozivo_stanje": sender.RaspolozivoStanje - payment.Iznos,
+			"dnevna_potrosnja":   sender.DnevnaPotrosnja + payment.Iznos,
+			"mesecna_potrosnja":  sender.MesecnaPotrosnja + payment.Iznos,
+		}); err != nil {
+			return fmt.Errorf("failed to deduct balance: %w", err)
+		}
+		if err := s.accountRepo.UpdateFieldsTx(tx, receiver.ID, map[string]interface{}{
+			"stanje":             receiver.Stanje + payment.Iznos,
+			"raspolozivo_stanje": receiver.RaspolozivoStanje + payment.Iznos,
+		}); err != nil {
+			return fmt.Errorf("failed to credit receiver balance: %w", err)
+		}
+
+		if err := tx.Model(&models.Payment{}).Where("id = ?", payment.ID).Updates(map[string]interface{}{
+			"status":                  paymentStatusCompleted,
+			"verifikacioni_kod":       "",
+			"verification_expires_at": nil,
+			"vreme_transakcije":       time.Now().UTC(),
+		}).Error; err != nil {
+			return fmt.Errorf("failed to update payment status: %w", err)
+		}
+
+		payment.Status = paymentStatusCompleted
+		payment.VerifikacioniKod = ""
+		payment.VerificationExpiresAt = nil
+		result = payment
+		return nil
+	})
+	if txErr != nil {
+		var verr *PaymentVerificationError
+		if errors.As(txErr, &verr) && verr.Code != "payment_already_processed" {
+			s.cancelPrenos(payment)
+		}
+		return nil, txErr
+	}
+	return result, nil
+}
+
+func (s *PrenosService) settlePrenosNonTx(payment *models.Payment) (*models.Payment, error) {
 	sender, err := s.accountRepo.FindByID(payment.RacunPosiljaocaID)
 	if err != nil {
 		return nil, fmt.Errorf("sender account not found: %w", err)
@@ -197,7 +309,6 @@ func (s *PrenosService) VerifyPrenos(paymentID uint, verificationCode string) (*
 	}); err != nil {
 		return nil, fmt.Errorf("failed to deduct balance: %w", err)
 	}
-
 	if err := s.accountRepo.UpdateFields(receiver.ID, map[string]interface{}{
 		"stanje":             receiver.Stanje + payment.Iznos,
 		"raspolozivo_stanje": receiver.RaspolozivoStanje + payment.Iznos,
@@ -212,7 +323,6 @@ func (s *PrenosService) VerifyPrenos(paymentID uint, verificationCode string) (*
 	if err := s.paymentRepo.Save(payment); err != nil {
 		return nil, fmt.Errorf("failed to update payment status: %w", err)
 	}
-
 	return payment, nil
 }
 
@@ -221,6 +331,13 @@ func (s *PrenosService) findReceiverAccount(payment *models.Payment) (*models.Ac
 		return s.accountRepo.FindByID(*payment.RacunPrimaocaID)
 	}
 	return s.accountRepo.FindByBrojRacuna(payment.RacunPrimaocaBroj)
+}
+
+func (s *PrenosService) findReceiverAccountForUpdate(tx *gorm.DB, payment *models.Payment) (*models.Account, error) {
+	if payment.RacunPrimaocaID != nil {
+		return s.accountRepo.FindByIDForUpdate(tx, *payment.RacunPrimaocaID)
+	}
+	return s.accountRepo.FindByBrojRacunaForUpdate(tx, payment.RacunPrimaocaBroj)
 }
 
 func (s *PrenosService) cancelPrenos(payment *models.Payment) {

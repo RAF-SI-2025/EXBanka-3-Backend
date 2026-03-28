@@ -1,12 +1,15 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strings"
 	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/transfer-service/internal/models"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -33,8 +36,11 @@ func (e *TransferVerificationError) Error() string {
 // AccountRepositoryInterface defined here to avoid circular imports.
 type AccountRepositoryInterface interface {
 	FindByID(id uint) (*models.Account, error)
+	FindByIDForUpdate(tx *gorm.DB, id uint) (*models.Account, error)
 	UpdateFields(id uint, fields map[string]interface{}) error
+	UpdateFieldsTx(tx *gorm.DB, id uint, fields map[string]interface{}) error
 	FindBankAccountByCurrency(currencyKod string) (*models.Account, error)
+	FindBankAccountByCurrencyForUpdate(tx *gorm.DB, currencyKod string) (*models.Account, error)
 }
 
 // TransferRepositoryInterface defined here to avoid circular imports.
@@ -49,6 +55,7 @@ type TransferRepositoryInterface interface {
 // ExchangeRateServiceInterface allows mocking in tests.
 type ExchangeRateServiceInterface interface {
 	GetRate(fromCurrencyKod, toCurrencyKod string) (float64, error)
+	GetSellRate(fromCurrencyKod, toCurrencyKod string) (float64, error)
 }
 
 type CreateTransferInput struct {
@@ -75,6 +82,7 @@ type TransferService struct {
 	transferRepo TransferRepositoryInterface
 	exchangeSvc  ExchangeRateServiceInterface
 	notifier     TransferNotificationSender
+	db           *gorm.DB
 }
 
 func NewTransferServiceWithRepos(
@@ -97,6 +105,13 @@ func NewTransferServiceWithReposAndNotifier(
 		exchangeSvc:  exchangeSvc,
 		notifier:     notifier,
 	}
+}
+
+// WithDB sets the database handle used for transactional balance settlement.
+// Call this in production; tests that don't set it fall back to the non-transactional path.
+func (s *TransferService) WithDB(db *gorm.DB) *TransferService {
+	s.db = db
+	return s
 }
 
 func (s *TransferService) ListTransfersByAccount(accountID uint, filter models.TransferFilter) ([]models.Transfer, int64, error) {
@@ -236,6 +251,140 @@ func (s *TransferService) VerifyTransfer(transferID uint, verificationCode strin
 		}
 	}
 
+	return s.settleTransfer(transfer)
+}
+
+// settleTransfer executes balance deductions and marks the transfer completed.
+// When a db is configured it wraps everything in a SELECT FOR UPDATE transaction
+// to prevent concurrent double-spend. Otherwise falls back to the non-transactional path.
+func (s *TransferService) settleTransfer(transfer *models.Transfer) (*models.Transfer, error) {
+	if s.db == nil {
+		return s.settleTransferNonTx(transfer)
+	}
+
+	var result *models.Transfer
+	txErr := s.db.Transaction(func(tx *gorm.DB) error {
+		// Re-fetch and lock the transfer row to prevent double-execution.
+		var current models.Transfer
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			First(&current, transfer.ID).Error; err != nil {
+			return fmt.Errorf("transfer not found: %w", err)
+		}
+		if current.Status != transferStatusPending {
+			return &TransferVerificationError{
+				Code:    "transfer_already_processed",
+				Message: fmt.Sprintf("transfer already %s", current.Status),
+				Status:  current.Status,
+			}
+		}
+
+		sender, err := s.accountRepo.FindByIDForUpdate(tx, transfer.RacunPosiljaocaID)
+		if err != nil {
+			return fmt.Errorf("sender account not found: %w", err)
+		}
+		receiver, err := s.accountRepo.FindByIDForUpdate(tx, transfer.RacunPrimaocaID)
+		if err != nil {
+			return fmt.Errorf("receiver account not found: %w", err)
+		}
+
+		if sender.ClientID == nil || receiver.ClientID == nil || *sender.ClientID != *receiver.ClientID {
+			return &TransferVerificationError{
+				Code:    "transfer_ownership_mismatch",
+				Message: "transfer accounts must belong to the same client",
+				Status:  transferStatusCancelled,
+			}
+		}
+
+		ukupnoZaSkidanje := transfer.Iznos + transfer.Provizija
+		if sender.RaspolozivoStanje < ukupnoZaSkidanje {
+			return &TransferVerificationError{
+				Code:    "insufficient_balance",
+				Message: fmt.Sprintf("insufficient balance: available %.2f, required %.2f", sender.RaspolozivoStanje, ukupnoZaSkidanje),
+				Status:  transferStatusCancelled,
+			}
+		}
+		if transfer.Iznos > sender.DnevniLimit || sender.DnevnaPotrosnja+transfer.Iznos > sender.DnevniLimit {
+			return &TransferVerificationError{
+				Code:    "daily_limit_exceeded",
+				Message: "daily spending limit exceeded",
+				Status:  transferStatusCancelled,
+			}
+		}
+		if sender.MesecnaPotrosnja+transfer.Iznos > sender.MesecniLimit {
+			return &TransferVerificationError{
+				Code:    "monthly_limit_exceeded",
+				Message: "monthly spending limit exceeded",
+				Status:  transferStatusCancelled,
+			}
+		}
+
+		if err := s.accountRepo.UpdateFieldsTx(tx, sender.ID, map[string]interface{}{
+			"stanje":             sender.Stanje - ukupnoZaSkidanje,
+			"raspolozivo_stanje": sender.RaspolozivoStanje - ukupnoZaSkidanje,
+			"dnevna_potrosnja":   sender.DnevnaPotrosnja + transfer.Iznos,
+			"mesecna_potrosnja":  sender.MesecnaPotrosnja + transfer.Iznos,
+		}); err != nil {
+			return fmt.Errorf("failed to update sender balance: %w", err)
+		}
+
+		// For cross-currency transfers, route through the bank's own accounts (menjačnica).
+		if sender.CurrencyID != receiver.CurrencyID {
+			bankFrom, err := s.accountRepo.FindBankAccountByCurrencyForUpdate(tx, sender.Currency.Kod)
+			if err != nil {
+				return fmt.Errorf("bank account for currency %s not found: %w", sender.Currency.Kod, err)
+			}
+			bankTo, err := s.accountRepo.FindBankAccountByCurrencyForUpdate(tx, receiver.Currency.Kod)
+			if err != nil {
+				return fmt.Errorf("bank account for currency %s not found: %w", receiver.Currency.Kod, err)
+			}
+			if err := s.accountRepo.UpdateFieldsTx(tx, bankFrom.ID, map[string]interface{}{
+				"stanje":             bankFrom.Stanje + ukupnoZaSkidanje,
+				"raspolozivo_stanje": bankFrom.RaspolozivoStanje + ukupnoZaSkidanje,
+			}); err != nil {
+				return fmt.Errorf("failed to update bank from-currency account: %w", err)
+			}
+			if err := s.accountRepo.UpdateFieldsTx(tx, bankTo.ID, map[string]interface{}{
+				"stanje":             bankTo.Stanje - transfer.KonvertovaniIznos,
+				"raspolozivo_stanje": bankTo.RaspolozivoStanje - transfer.KonvertovaniIznos,
+			}); err != nil {
+				return fmt.Errorf("failed to update bank to-currency account: %w", err)
+			}
+		}
+
+		if err := s.accountRepo.UpdateFieldsTx(tx, receiver.ID, map[string]interface{}{
+			"stanje":             receiver.Stanje + transfer.KonvertovaniIznos,
+			"raspolozivo_stanje": receiver.RaspolozivoStanje + transfer.KonvertovaniIznos,
+		}); err != nil {
+			return fmt.Errorf("failed to update receiver balance: %w", err)
+		}
+
+		if err := tx.Model(&models.Transfer{}).Where("id = ?", transfer.ID).Updates(map[string]interface{}{
+			"status":                  transferStatusCompleted,
+			"verifikacioni_kod":       "",
+			"verification_expires_at": nil,
+			"vreme_transakcije":       time.Now().UTC(),
+		}).Error; err != nil {
+			return fmt.Errorf("failed to save transfer: %w", err)
+		}
+
+		transfer.Status = transferStatusCompleted
+		transfer.VerifikacioniKod = ""
+		transfer.VerificationExpiresAt = nil
+		result = transfer
+		return nil
+	})
+	if txErr != nil {
+		var verr *TransferVerificationError
+		if errors.As(txErr, &verr) && verr.Code != "transfer_already_processed" {
+			s.cancelTransfer(transfer)
+		}
+		return nil, txErr
+	}
+	return result, nil
+}
+
+// settleTransferNonTx is the original non-transactional settlement path used by tests.
+func (s *TransferService) settleTransferNonTx(transfer *models.Transfer) (*models.Transfer, error) {
 	sender, err := s.accountRepo.FindByID(transfer.RacunPosiljaocaID)
 	if err != nil {
 		return nil, fmt.Errorf("sender account not found: %w", err)
@@ -329,7 +478,6 @@ func (s *TransferService) VerifyTransfer(transferID uint, verificationCode strin
 	if err := s.transferRepo.Save(transfer); err != nil {
 		return nil, fmt.Errorf("failed to save transfer: %w", err)
 	}
-
 	return transfer, nil
 }
 
@@ -411,7 +559,7 @@ func (s *TransferService) prepareTransfer(input CreateTransferInput) (*TransferP
 		if sender.Currency.Kod == "RSD" {
 			rsdAmount = input.Iznos
 		} else {
-			kursToRSD, err2 := s.exchangeSvc.GetRate(sender.Currency.Kod, "RSD")
+			kursToRSD, err2 := s.exchangeSvc.GetSellRate(sender.Currency.Kod, "RSD")
 			if err2 != nil {
 				return nil, nil, nil, fmt.Errorf("failed to get exchange rate %s→RSD: %w", sender.Currency.Kod, err2)
 			}
@@ -421,7 +569,7 @@ func (s *TransferService) prepareTransfer(input CreateTransferInput) (*TransferP
 		if receiver.Currency.Kod == "RSD" {
 			konvertovaniIznos = math.Round(rsdAmount*100) / 100
 		} else {
-			kursFromRSD, err2 := s.exchangeSvc.GetRate("RSD", receiver.Currency.Kod)
+			kursFromRSD, err2 := s.exchangeSvc.GetSellRate("RSD", receiver.Currency.Kod)
 			if err2 != nil {
 				return nil, nil, nil, fmt.Errorf("failed to get exchange rate RSD→%s: %w", receiver.Currency.Kod, err2)
 			}

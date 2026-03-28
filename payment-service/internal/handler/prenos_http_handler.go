@@ -29,7 +29,7 @@ func NewPrenosHTTPHandler(db *gorm.DB, cfg *config.Config) *PrenosHTTPHandler {
 	accountRepo := repository.NewAccountRepository(db)
 	paymentRepo := repository.NewPaymentRepository(db)
 	notifSvc := service.NewNotificationService(cfg)
-	svc := service.NewPrenosServiceWithRepos(accountRepo, paymentRepo, notifSvc)
+	svc := service.NewPrenosServiceWithRepos(accountRepo, paymentRepo, notifSvc).WithDB(db)
 	return &PrenosHTTPHandler{svc: svc, db: db, cfg: cfg}
 }
 
