@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -8,16 +9,18 @@ import (
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/config"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/repository"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/service"
 )
 
 type MarketHTTPHandler struct {
-	cfg *config.Config
-	svc *service.MarketService
+	cfg  *config.Config
+	svc  *service.MarketService
+	repo *repository.MarketRepository
 }
 
-func NewMarketHTTPHandler(cfg *config.Config, svc *service.MarketService) *MarketHTTPHandler {
-	return &MarketHTTPHandler{cfg: cfg, svc: svc}
+func NewMarketHTTPHandler(cfg *config.Config, svc *service.MarketService, repo *repository.MarketRepository) *MarketHTTPHandler {
+	return &MarketHTTPHandler{cfg: cfg, svc: svc, repo: repo}
 }
 
 func (h *MarketHTTPHandler) ListExchanges(w http.ResponseWriter, r *http.Request) {
@@ -63,11 +66,36 @@ func (h *MarketHTTPHandler) ListListings(w http.ResponseWriter, r *http.Request)
 	}
 
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	listingType := strings.TrimSpace(r.URL.Query().Get("type"))
+
 	listings, err := h.svc.ListListings(query)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to load listings"})
 		return
 	}
+
+	// Filter by type if specified
+	if listingType != "" {
+		filtered := make([]models.Listing, 0, len(listings))
+		for _, l := range listings {
+			if string(l.Type) == listingType {
+				filtered = append(filtered, l)
+			}
+		}
+		listings = filtered
+	}
+
+	// For clients, restrict to stocks and futures only
+	if claims.TokenSource == "client" {
+		filtered := make([]models.Listing, 0, len(listings))
+		for _, l := range listings {
+			if l.Type == models.ListingTypeStock || l.Type == models.ListingTypeFutures {
+				filtered = append(filtered, l)
+			}
+		}
+		listings = filtered
+	}
+
 	items := make([]listingResponse, 0, len(listings))
 	for _, listing := range listings {
 		items = append(items, listingToResponse(listing))
@@ -77,6 +105,7 @@ func (h *MarketHTTPHandler) ListListings(w http.ResponseWriter, r *http.Request)
 		"listings": items,
 		"count":    len(items),
 		"query":    query,
+		"type":     listingType,
 	})
 }
 
@@ -104,13 +133,74 @@ func (h *MarketHTTPHandler) ListingRoutes(w http.ResponseWriter, r *http.Request
 
 	switch {
 	case len(parts) == 1:
-		listing, err := h.svc.GetListing(ticker)
-		if err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]string{"message": err.Error()})
+		record, err := h.repo.GetListingRecordByTicker(strings.ToUpper(ticker))
+		if err != nil || record == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "listing not found"})
 			return
 		}
+		response := listingToResponse(record.ToDomain())
+		detail := map[string]interface{}{"listing": response}
+
+		// Attach subtype-specific data
+		switch record.Type {
+		case "stock":
+			if stock, err := h.repo.GetStockByListingID(record.ID); err == nil && stock != nil {
+				detail["stock"] = map[string]interface{}{
+					"outstandingShares": stock.OutstandingShares,
+					"dividendYield":    stock.DividendYield,
+				}
+			}
+		case "forex":
+			if forex, err := h.repo.GetForexByListingID(record.ID); err == nil && forex != nil {
+				detail["forex"] = map[string]interface{}{
+					"baseCurrency":  forex.BaseCurrency,
+					"quoteCurrency": forex.QuoteCurrency,
+					"liquidity":     forex.Liquidity,
+				}
+			}
+		case "futures":
+			if futures, err := h.repo.GetFuturesByListingID(record.ID); err == nil && futures != nil {
+				detail["futures"] = map[string]interface{}{
+					"contractSize":   futures.ContractSize,
+					"contractUnit":   futures.ContractUnit,
+					"settlementDate": futures.SettlementDate.Format("2006-01-02"),
+				}
+			}
+		}
+		writeJSON(w, http.StatusOK, detail)
+	case len(parts) == 2 && parts[1] == "options":
+		// Get options chain for a stock
+		record, err := h.repo.GetListingRecordByTicker(strings.ToUpper(ticker))
+		if err != nil || record == nil || record.Type != "stock" {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "stock listing not found"})
+			return
+		}
+		options, err := h.repo.GetOptionsByStockListingID(record.ID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to load options"})
+			return
+		}
+		optionItems := make([]map[string]interface{}, 0, len(options))
+		for _, opt := range options {
+			optionItems = append(optionItems, map[string]interface{}{
+				"ticker":            opt.Listing.Ticker,
+				"name":              opt.Listing.Name,
+				"price":             opt.Listing.Price,
+				"ask":               opt.Listing.Ask,
+				"bid":               opt.Listing.Bid,
+				"volume":            opt.Listing.Volume,
+				"optionType":        opt.OptionType,
+				"strikePrice":       opt.StrikePrice,
+				"impliedVolatility": opt.ImpliedVolatility,
+				"openInterest":      opt.OpenInterest,
+				"settlementDate":    opt.SettlementDate.Format("2006-01-02"),
+			})
+		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"listing": listingToResponse(*listing),
+			"ticker":     strings.ToUpper(ticker),
+			"stockPrice": record.Price,
+			"options":    optionItems,
+			"count":      len(optionItems),
 		})
 	case len(parts) == 2 && parts[1] == "history":
 		history, err := h.svc.GetListingHistory(ticker)
@@ -162,15 +252,109 @@ func (h *MarketHTTPHandler) GetPortfolio(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// ExchangeRoutes handles /api/v1/exchanges/{acronym}/... routes
+func (h *MarketHTTPHandler) ExchangeRoutes(w http.ResponseWriter, r *http.Request) {
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/exchanges/"), "/")
+	if path == "" {
+		http.NotFound(w, r)
+		return
+	}
+	parts := strings.Split(path, "/")
+	acronym := strings.ToUpper(parts[0])
+
+	switch {
+	case len(parts) == 1 && parts[0] == "status":
+		// This shouldn't match; status needs an acronym
+		http.NotFound(w, r)
+	case len(parts) == 2 && parts[1] == "status":
+		h.getExchangeStatus(w, r, acronym)
+	case len(parts) == 2 && parts[1] == "toggle":
+		h.toggleExchangeTime(w, r, acronym)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (h *MarketHTTPHandler) getExchangeStatus(w http.ResponseWriter, r *http.Request, acronym string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	claims, ok := requireAuthenticatedHTTP(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireMarketReadAccessHTTP(w, claims) {
+		return
+	}
+
+	record, err := h.repo.GetExchangeByAcronym(acronym)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to load exchange"})
+		return
+	}
+	if record == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "exchange not found"})
+		return
+	}
+
+	exchange := record.ToDomain()
+	status := service.GetExchangeTimeStatus(exchange)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"exchange": acronym,
+		"status":   status,
+	})
+}
+
+func (h *MarketHTTPHandler) toggleExchangeTime(w http.ResponseWriter, r *http.Request, acronym string) {
+	if r.Method != http.MethodPost && r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	claims, ok := requireAuthenticatedHTTP(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	// Only supervisors can toggle
+	if !requireSupervisorHTTP(w, claims) {
+		return
+	}
+
+	var body struct {
+		UseManualTime  bool `json:"useManualTime"`
+		ManualTimeOpen bool `json:"manualTimeOpen"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body"})
+		return
+	}
+
+	if err := h.repo.ToggleExchangeManualTime(acronym, body.UseManualTime, body.ManualTimeOpen); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to update exchange"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"exchange":       acronym,
+		"useManualTime":  body.UseManualTime,
+		"manualTimeOpen": body.ManualTimeOpen,
+		"message":        "exchange time toggle updated",
+	})
+}
+
 type exchangeResponse struct {
-	Name         string `json:"name"`
-	Acronym      string `json:"acronym"`
-	MICCode      string `json:"micCode"`
-	Polity       string `json:"polity"`
-	Currency     string `json:"currency"`
-	Timezone     string `json:"timezone"`
-	WorkingHours string `json:"workingHours"`
-	Enabled      bool   `json:"enabled"`
+	ID             uint   `json:"id"`
+	Name           string `json:"name"`
+	Acronym        string `json:"acronym"`
+	MICCode        string `json:"micCode"`
+	Polity         string `json:"polity"`
+	Currency       string `json:"currency"`
+	Timezone       string `json:"timezone"`
+	WorkingHours   string `json:"workingHours"`
+	UseManualTime  bool   `json:"useManualTime"`
+	ManualTimeOpen bool   `json:"manualTimeOpen"`
+	Enabled        bool   `json:"enabled"`
 }
 
 type exchangeSummaryResponse struct {
@@ -232,14 +416,17 @@ type portfolioResponse struct {
 
 func exchangeToResponse(exchange models.Exchange) exchangeResponse {
 	return exchangeResponse{
-		Name:         exchange.Name,
-		Acronym:      exchange.Acronym,
-		MICCode:      exchange.MICCode,
-		Polity:       exchange.Polity,
-		Currency:     exchange.Currency,
-		Timezone:     exchange.Timezone,
-		WorkingHours: exchange.WorkingHours,
-		Enabled:      exchange.Enabled,
+		ID:             exchange.ID,
+		Name:           exchange.Name,
+		Acronym:        exchange.Acronym,
+		MICCode:        exchange.MICCode,
+		Polity:         exchange.Polity,
+		Currency:       exchange.Currency,
+		Timezone:       exchange.Timezone,
+		WorkingHours:   exchange.WorkingHours,
+		UseManualTime:  exchange.UseManualTime,
+		ManualTimeOpen: exchange.ManualTimeOpen,
+		Enabled:        exchange.Enabled,
 	}
 }
 

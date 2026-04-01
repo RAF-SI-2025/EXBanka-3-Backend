@@ -35,3 +35,30 @@ func (r *ActuaryProfileRepository) Upsert(profile *models.ActuaryProfile) error 
 func (r *ActuaryProfileRepository) DeleteByEmployeeID(employeeID uint) error {
 	return r.db.Where("employee_id = ?", employeeID).Delete(&models.ActuaryProfile{}).Error
 }
+
+func (r *ActuaryProfileRepository) UpdateLimit(employeeID uint, limit *float64) error {
+	return r.db.Model(&models.ActuaryProfile{}).
+		Where("employee_id = ?", employeeID).
+		Update("trading_limit", limit).Error
+}
+
+func (r *ActuaryProfileRepository) ResetUsedLimit(employeeID uint) error {
+	return r.db.Model(&models.ActuaryProfile{}).
+		Where("employee_id = ?", employeeID).
+		Update("used_limit", 0).Error
+}
+
+func (r *ActuaryProfileRepository) SetNeedApproval(employeeID uint, needApproval bool) error {
+	return r.db.Model(&models.ActuaryProfile{}).
+		Where("employee_id = ?", employeeID).
+		Update("need_approval", needApproval).Error
+}
+
+// ResetAllAgentUsedLimits resets used_limit to 0 for all agents (those with a non-null limit).
+// Supervisors have NULL limit and are excluded.
+func (r *ActuaryProfileRepository) ResetAllAgentUsedLimits() (int64, error) {
+	result := r.db.Model(&models.ActuaryProfile{}).
+		Where("trading_limit IS NOT NULL").
+		Update("used_limit", 0)
+	return result.RowsAffected, result.Error
+}

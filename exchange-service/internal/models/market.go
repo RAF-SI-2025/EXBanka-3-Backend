@@ -8,17 +8,21 @@ const (
 	ListingTypeStock   ListingType = "stock"
 	ListingTypeForex   ListingType = "forex"
 	ListingTypeFutures ListingType = "futures"
+	ListingTypeOption  ListingType = "option"
 )
 
 type Exchange struct {
-	Name         string `json:"name"`
-	Acronym      string `json:"acronym"`
-	MICCode      string `json:"micCode"`
-	Polity       string `json:"polity"`
-	Currency     string `json:"currency"`
-	Timezone     string `json:"timezone"`
-	WorkingHours string `json:"workingHours"`
-	Enabled      bool   `json:"enabled"`
+	ID             uint   `json:"id"`
+	Name           string `json:"name"`
+	Acronym        string `json:"acronym"`
+	MICCode        string `json:"micCode"`
+	Polity         string `json:"polity"`
+	Currency       string `json:"currency"`
+	Timezone       string `json:"timezone"`
+	WorkingHours   string `json:"workingHours"`
+	UseManualTime  bool   `json:"useManualTime"`
+	ManualTimeOpen bool   `json:"manualTimeOpen"`
+	Enabled        bool   `json:"enabled"`
 }
 
 type ExchangeSummary struct {

@@ -27,6 +27,13 @@ const (
 	PermClientTrading = "clientTrading"
 )
 
+// Spec-compatible aliases (Sprint 4 backlog names)
+const (
+	PermCanTrade    = PermClientTrading     // canTrade → clientTrading
+	PermIsAgent     = PermEmployeeAgent     // isAgent → employeeAgent
+	PermIsSupervisor = PermEmployeeSupervisor // isSupervisor → employeeSupervisor
+)
+
 var DefaultPermissions = []Permission{
 	{Name: PermEmployeeBasic, Description: "Osnovno poslovanje banke, upravljanje klijentima", SubjectType: PermissionSubjectEmployee},
 	{Name: PermEmployeeAgent, Description: "Osnovno poslovanje banke, upravljanje klijentima, trgovina hartijama sa berze uz limite", SubjectType: PermissionSubjectEmployee},
