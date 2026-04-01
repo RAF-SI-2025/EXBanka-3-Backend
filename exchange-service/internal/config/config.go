@@ -18,6 +18,8 @@ type Config struct {
 	GRPCPort  string
 	HTTPPort  string
 	JWTSecret string
+
+	AlphaVantageAPIKey string
 }
 
 func Load() *Config {
@@ -32,7 +34,8 @@ func Load() *Config {
 		DBSSLMode:  getEnv("DB_SSL_MODE", "disable"),
 		GRPCPort:   getEnv("GRPC_PORT", "9098"),
 		HTTPPort:   getEnv("HTTP_PORT", "8088"),
-		JWTSecret:  getEnv("JWT_SECRET", "super-secret-jwt-key-change-in-production"),
+		JWTSecret:          getEnv("JWT_SECRET", "super-secret-jwt-key-change-in-production"),
+		AlphaVantageAPIKey: getEnv("ALPHA_VANTAGE_API_KEY", "demo"),
 	}
 
 	slog.Info("Exchange-service config loaded",

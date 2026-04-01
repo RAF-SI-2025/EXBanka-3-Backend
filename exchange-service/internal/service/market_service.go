@@ -15,6 +15,11 @@ type MarketDataProvider interface {
 	GetPortfolio(ownerID uint, ownerType models.PortfolioOwnerType) (*models.Portfolio, error)
 }
 
+type ExchangeToggler interface {
+	GetExchangeByAcronym(acronym string) (*models.MarketExchangeRecord, error)
+	ToggleExchangeManualTime(acronym string, useManual bool, manualOpen bool) error
+}
+
 type MarketService struct {
 	provider MarketDataProvider
 }

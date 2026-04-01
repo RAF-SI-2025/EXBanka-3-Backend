@@ -53,7 +53,7 @@ func callInterceptor(t *testing.T, cfg *config.Config, method, token string) err
 
 func TestAuthInterceptor_EmployeeJWT_PassesForEmployeeEndpoint(t *testing.T) {
 	cfg := newTestConfig()
-	tok := employeeToken(t, []string{models.PermAdmin})
+	tok := employeeToken(t, []string{models.PermEmployeeAdmin})
 	err := callInterceptor(t, cfg, "/employee.v1.EmployeeService/GetEmployee", tok)
 	if err != nil {
 		t.Errorf("expected no error for admin employee token, got %v", err)
@@ -75,7 +75,7 @@ func TestAuthInterceptor_ClientJWT_RejectedOnEmployeeService(t *testing.T) {
 
 func TestAuthInterceptor_ExpiredToken_Rejected(t *testing.T) {
 	cfg := newTestConfig()
-	expired, err := util.GenerateAccessToken(1, "admin@bank.com", "admin", []string{models.PermAdmin}, testSecret, -1)
+	expired, err := util.GenerateAccessToken(1, "admin@bank.com", "admin", []string{models.PermEmployeeAdmin}, testSecret, -1)
 	if err != nil {
 		t.Fatalf("generate expired token: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestAuthInterceptor_MissingToken_Rejected(t *testing.T) {
 
 func TestAuthInterceptor_EmployeeJWT_PermissionDeniedWithoutRequiredPerm(t *testing.T) {
 	cfg := newTestConfig()
-	tok := employeeToken(t, []string{models.PermEmployeeRead}) // not admin, not create
+	tok := employeeToken(t, []string{models.PermEmployeeBasic}) // not admin, not create
 	err := callInterceptor(t, cfg, "/employee.v1.EmployeeService/CreateEmployee", tok)
 	if err == nil {
 		t.Fatal("expected PermissionDenied for employee without create permission, got nil")

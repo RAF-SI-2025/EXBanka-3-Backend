@@ -38,16 +38,22 @@ func main() {
 		slog.Error("DB migration failed", "error", err)
 		os.Exit(1)
 	}
-	if err := database.SeedMarketData(db); err != nil {
-		slog.Error("Market seed failed", "error", err)
-		os.Exit(1)
-	}
+
+	cronScheduler := service.StartCronJobs(db)
+
+	go func() {
+		slog.Info("Running market data seed in background...")
+		if err := database.SeedMarketData(db); err != nil {
+			slog.Error("Market seed failed", "error", err)
+		}
+	}()
+	defer cronScheduler.Stop()
 
 	exchangeH := handler.NewExchangeHandler()
 	marketRepo := repository.NewMarketRepository(db)
 	marketProvider := provider.NewDatabaseMarketProvider(marketRepo)
 	marketSvc := service.NewMarketService(marketProvider)
-	marketH := handler.NewMarketHTTPHandler(cfg, marketSvc)
+	marketH := handler.NewMarketHTTPHandler(cfg, marketSvc, marketRepo)
 
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
@@ -86,6 +92,7 @@ func main() {
 	httpMux := http.NewServeMux()
 	httpMux.HandleFunc("/health", healthCheck)
 	httpMux.Handle("/api/v1/exchanges", middleware.CORS(http.HandlerFunc(marketH.ListExchanges)))
+	httpMux.Handle("/api/v1/exchanges/", middleware.CORS(http.HandlerFunc(marketH.ExchangeRoutes)))
 	httpMux.Handle("/api/v1/listings", middleware.CORS(http.HandlerFunc(marketH.ListListings)))
 	httpMux.Handle("/api/v1/listings/", middleware.CORS(http.HandlerFunc(marketH.ListingRoutes)))
 	httpMux.Handle("/api/v1/portfolio", middleware.CORS(http.HandlerFunc(marketH.GetPortfolio)))

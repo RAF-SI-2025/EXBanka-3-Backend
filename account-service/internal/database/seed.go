@@ -81,6 +81,62 @@ func SeedBankAccounts(db *gorm.DB) error {
 	return nil
 }
 
+// SeedStateAccounts creates the "Republika Srbija" Firma (is_state=true) with one RSD
+// tekući account. This account receives capital gains tax payments.
+func SeedStateAccounts(db *gorm.DB) error {
+	var sifra models.SifraDelatnosti
+	if err := db.Where("sifra = ?", "64.1").First(&sifra).Error; err != nil {
+		return err
+	}
+
+	var firma models.Firma
+	result := db.Where("maticni_broj = ?", "00000001").First(&firma)
+	if result.Error == gorm.ErrRecordNotFound {
+		firma = models.Firma{
+			Naziv:             "Republika Srbija",
+			MaticniBroj:       "00000001",
+			PIB:               "000000001",
+			Adresa:            "Nemanjina 11, Beograd, Srbija",
+			IsState:           true,
+			SifraDelatnostiID: &sifra.ID,
+		}
+		if err := db.Create(&firma).Error; err != nil {
+			return err
+		}
+		slog.Info("Seeded state Firma", "naziv", firma.Naziv)
+	}
+
+	var currency models.Currency
+	if err := db.Where("kod = ?", "RSD").First(&currency).Error; err != nil {
+		slog.Warn("RSD currency not found, skipping state account")
+		return nil
+	}
+
+	var existing models.Account
+	err := db.Where("firma_id = ? AND currency_id = ?", firma.ID, currency.ID).First(&existing).Error
+	if err == gorm.ErrRecordNotFound {
+		brojRacuna := util.GenerateAccountNumber("tekuci", "poslovni")
+		acc := models.Account{
+			BrojRacuna:        brojRacuna,
+			FirmaID:           &firma.ID,
+			CurrencyID:        currency.ID,
+			Tip:               "tekuci",
+			Vrsta:             "poslovni",
+			Naziv:             "Republika Srbija — RSD",
+			Status:            "aktivan",
+			Stanje:            0,
+			RaspolozivoStanje: 0,
+		}
+		if err := db.Create(&acc).Error; err != nil {
+			return err
+		}
+		slog.Info("Seeded state account", "broj", brojRacuna)
+	}
+
+	slog.Info("State accounts seed complete")
+	return nil
+}
+
 func SeedCurrencies(db *gorm.DB) error {
 	currencies := []models.Currency{
 		{Kod: "RSD", Naziv: "Srpski dinar", Simbol: "RSD", Drzava: "Srbija", Aktivan: true},

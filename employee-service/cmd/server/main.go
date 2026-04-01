@@ -48,6 +48,9 @@ func main() {
 	employeeH := handler.NewEmployeeHandlerWithService(employeeSvc)
 	actuaryHTTPHandler := handler.NewActuaryHTTPHandler(cfg, employeeSvc)
 
+	cronScheduler := infrasvc.StartCronJobs(employeeSvc)
+	defer cronScheduler.Stop()
+
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
 			middleware.LoggingInterceptor(),
@@ -85,6 +88,7 @@ func main() {
 	httpMux := http.NewServeMux()
 	httpMux.HandleFunc("/health", healthCheck)
 	httpMux.Handle("/api/v1/actuaries", middleware.CORS(http.HandlerFunc(actuaryHTTPHandler.ListActuaries)))
+	httpMux.Handle("/api/v1/actuaries/", middleware.CORS(http.HandlerFunc(actuaryHTTPHandler.ActuaryRoutes)))
 	httpMux.Handle("/", middleware.CORS(gwMux))
 
 	httpServer := &http.Server{

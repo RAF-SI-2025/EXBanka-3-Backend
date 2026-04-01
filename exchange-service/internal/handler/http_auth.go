@@ -69,6 +69,18 @@ func requireMarketReadAccessHTTP(w http.ResponseWriter, claims *util.Claims) boo
 	}
 }
 
+func requireSupervisorHTTP(w http.ResponseWriter, claims *util.Claims) bool {
+	if claims.TokenSource != "employee" || claims.EmployeeID == 0 {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "employee access required"})
+		return false
+	}
+	if !util.HasPermission(claims, models.PermEmployeeSupervisor) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "supervisor permission required"})
+		return false
+	}
+	return true
+}
+
 func writeJSON(w http.ResponseWriter, statusCode int, payload interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)

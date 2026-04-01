@@ -145,6 +145,11 @@ func (m *mockActuaryProfileRepo) DeleteByEmployeeID(employeeID uint) error {
 	return nil
 }
 
+func (m *mockActuaryProfileRepo) UpdateLimit(_ uint, _ *float64) error      { return nil }
+func (m *mockActuaryProfileRepo) ResetUsedLimit(_ uint) error               { return nil }
+func (m *mockActuaryProfileRepo) SetNeedApproval(_ uint, _ bool) error      { return nil }
+func (m *mockActuaryProfileRepo) ResetAllAgentUsedLimits() (int64, error)   { return 0, nil }
+
 // ---- mock token repository ----
 
 type mockTokenRepo struct {

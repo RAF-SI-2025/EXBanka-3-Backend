@@ -144,6 +144,49 @@ func (s *EmployeeService) syncActuaryProfile(emp *models.Employee) (*models.Actu
 	return profile, nil
 }
 
+func (s *EmployeeService) UpdateAgentLimit(employeeID uint, limit *float64) error {
+	emp, err := s.employeeRepo.FindByID(employeeID)
+	if err != nil {
+		return fmt.Errorf("employee not found")
+	}
+	if !emp.IsActuaryRole() {
+		return fmt.Errorf("employee is not an actuary")
+	}
+	if emp.IsSupervisorRole() {
+		return fmt.Errorf("supervisors do not have limits")
+	}
+	return s.actuaryRepo.UpdateLimit(employeeID, limit)
+}
+
+func (s *EmployeeService) ResetAgentUsedLimit(employeeID uint) error {
+	emp, err := s.employeeRepo.FindByID(employeeID)
+	if err != nil {
+		return fmt.Errorf("employee not found")
+	}
+	if !emp.IsActuaryRole() {
+		return fmt.Errorf("employee is not an actuary")
+	}
+	return s.actuaryRepo.ResetUsedLimit(employeeID)
+}
+
+func (s *EmployeeService) SetNeedApproval(employeeID uint, needApproval bool) error {
+	emp, err := s.employeeRepo.FindByID(employeeID)
+	if err != nil {
+		return fmt.Errorf("employee not found")
+	}
+	if !emp.IsActuaryRole() {
+		return fmt.Errorf("employee is not an actuary")
+	}
+	if emp.IsSupervisorRole() {
+		return fmt.Errorf("supervisors always have need_approval=false")
+	}
+	return s.actuaryRepo.SetNeedApproval(employeeID, needApproval)
+}
+
+func (s *EmployeeService) ResetAllAgentUsedLimits() (int64, error) {
+	return s.actuaryRepo.ResetAllAgentUsedLimits()
+}
+
 func cloneLimit(limit *float64) *float64 {
 	if limit == nil {
 		return nil

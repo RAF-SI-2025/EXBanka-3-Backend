@@ -33,6 +33,10 @@ type ActuaryProfileRepositoryInterface interface {
 	FindByEmployeeID(employeeID uint) (*models.ActuaryProfile, error)
 	Upsert(profile *models.ActuaryProfile) error
 	DeleteByEmployeeID(employeeID uint) error
+	UpdateLimit(employeeID uint, limit *float64) error
+	ResetUsedLimit(employeeID uint) error
+	SetNeedApproval(employeeID uint, needApproval bool) error
+	ResetAllAgentUsedLimits() (int64, error)
 }
 
 var _ EmployeeRepositoryInterface = (*EmployeeRepository)(nil)

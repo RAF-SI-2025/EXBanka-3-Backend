@@ -32,8 +32,15 @@ func Migrate(db *gorm.DB) error {
 	slog.Info("Running exchange-service database migrations...")
 	if err := db.AutoMigrate(
 		&models.MarketExchangeRecord{},
+		&models.ExchangeWorkingDayRecord{},
 		&models.MarketListingRecord{},
 		&models.MarketListingDailyPriceInfoRecord{},
+		&models.StockRecord{},
+		&models.ForexPairRecord{},
+		&models.FuturesContractRecord{},
+		&models.OptionRecord{},
+		&models.OrderRecord{},
+		&models.OrderTransactionRecord{},
 	); err != nil {
 		return fmt.Errorf("migration failed: %w", err)
 	}
