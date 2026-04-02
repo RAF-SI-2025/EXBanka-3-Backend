@@ -39,7 +39,6 @@ func main() {
 	exchangeURL := envOrDefault("EXCHANGE_SERVICE_URL", "http://exchange-service:8088")
 	transferH := handler.NewTransferHandler(db, exchangeURL, cfg)
 	transferHTTPH := handler.NewTransferHTTPHandler(db, exchangeURL, cfg)
-	verifyTransferH := handler.NewVerifyTransferHTTPHandlerWithConfig(transferH, db, cfg)
 	mobileVerificationH := handler.NewTransferMobileVerificationHandler(db, cfg, exchangeURL)
 
 	grpcServer := grpc.NewServer(
@@ -79,7 +78,7 @@ func main() {
 	httpMux := http.NewServeMux()
 	httpMux.HandleFunc("/health", healthCheck)
 	// Route all transfers through a combined handler: verify requests go to custom handler, rest to gwMux
-	combinedTransferHandler := handler.NewCombinedTransferHandler(transferHTTPH, verifyTransferH, mobileVerificationH, gwMux)
+	combinedTransferHandler := handler.NewCombinedTransferHandler(transferHTTPH, mobileVerificationH, gwMux)
 	httpMux.Handle("/api/v1/transfers", middleware.CORS(combinedTransferHandler))
 	httpMux.Handle("/api/v1/transfers/", middleware.CORS(combinedTransferHandler))
 	httpMux.Handle("/", middleware.CORS(gwMux))
