@@ -289,6 +289,23 @@ func (s *LoanService) ApproveLoan(loanID, zaposleniID uint) (*models.Loan, error
 				return fmt.Errorf("failed to disburse loan funds: %w", err)
 			}
 
+			// Debit the bank's own account for the disbursed loan amount.
+			var bankAccount models.Account
+			if err := tx.Table("accounts").
+				Select("accounts.*, currencies.kod as currency_kod").
+				Joins("JOIN currencies ON currencies.id = accounts.currency_id").
+				Joins("JOIN firmas ON firmas.id = accounts.firma_id").
+				Where("currencies.kod = ? AND accounts.firma_id IS NOT NULL AND accounts.client_id IS NULL AND firmas.is_state = false", account.CurrencyKod).
+				First(&bankAccount).Error; err != nil {
+				return fmt.Errorf("bank account for currency %s not found: %w", account.CurrencyKod, err)
+			}
+			if err := tx.Table("accounts").Where("id = ?", bankAccount.ID).Updates(map[string]interface{}{
+				"stanje":             bankAccount.Stanje - loan.Iznos,
+				"raspolozivo_stanje": bankAccount.RaspolozivoStanje - loan.Iznos,
+			}).Error; err != nil {
+				return fmt.Errorf("failed to debit bank account: %w", err)
+			}
+
 			loan.Status = "aktivan"
 			loan.ZaposleniID = &zaposleniID
 			if err := tx.Save(&loan).Error; err != nil {
