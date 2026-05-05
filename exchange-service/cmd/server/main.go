@@ -49,6 +49,7 @@ func main() {
 	orderRepo := repository.NewOrderRepository(db)
 	portfolioRepo := repository.NewPortfolioRepository(db)
 	otcRepo := repository.NewOtcRepository(db)
+	sagaRepo := repository.NewSagaRepository(db)
 	taxRepo := repository.NewTaxRepository(db)
 	taxSvc := service.NewTaxService(taxRepo, marketRepo, rateProvider)
 	portfolioSvc := service.NewPortfolioService(
@@ -58,7 +59,10 @@ func main() {
 		orderRepo,
 	)
 
-	cronScheduler := service.StartCronJobs(db, portfolioSvc, rateProvider)
+	sagaOrchestrator := service.NewSagaOrchestrator(sagaRepo, db)
+	sagaRetryRunner := service.NewSagaRetryRunner(sagaRepo, otcRepo, sagaOrchestrator)
+
+	cronScheduler := service.StartCronJobs(db, portfolioSvc, rateProvider, sagaRetryRunner)
 
 	go func() {
 		slog.Info("Running market data seed in background...")
@@ -76,8 +80,8 @@ func main() {
 	orderSvc := service.NewOrderService(orderRepo, marketRepo, rateProvider)
 	orderH := handler.NewOrderHTTPHandler(cfg, orderSvc)
 	portfolioH := handler.NewPortfolioHTTPHandler(cfg, portfolioSvc)
-	otcSvc := service.NewOtcService(portfolioRepo, otcRepo)
-	otcH := handler.NewOtcHTTPHandler(cfg, otcSvc)
+	otcSvc := service.NewOtcService(portfolioRepo, otcRepo).WithOrchestrator(sagaOrchestrator)
+	otcH := handler.NewOtcHTTPHandler(cfg, otcSvc).WithSagaQuerier(sagaRepo)
 
 	taxCollector := service.NewTaxCollector(taxSvc, orderRepo, taxRepo)
 	taxH := handler.NewTaxHTTPHandler(cfg, taxSvc, taxCollector)

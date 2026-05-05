@@ -403,6 +403,94 @@ func TestUpdateClient_AcceptsNonBankEmail(t *testing.T) {
 	}
 }
 
+func TestListClients_DelegatesToRepo(t *testing.T) {
+	wantFilter := repository.ClientFilter{Email: "x@gmail.com", Page: 2, PageSize: 5}
+	var gotFilter repository.ClientFilter
+	clientRepo := &mockClientRepo{
+		listFn: func(filter repository.ClientFilter) ([]models.Client, int64, error) {
+			gotFilter = filter
+			return []models.Client{{ID: 1}, {ID: 2}}, 7, nil
+		},
+	}
+	svc := newTestClientService(clientRepo, &mockPermRepo{})
+
+	items, total, err := svc.ListClients(wantFilter)
+	if err != nil {
+		t.Fatalf("ListClients() unexpected error: %v", err)
+	}
+	if total != 7 || len(items) != 2 {
+		t.Fatalf("ListClients() = (len=%d, total=%d), want (2, 7)", len(items), total)
+	}
+	if gotFilter != wantFilter {
+		t.Fatalf("ListClients() filter = %+v, want %+v", gotFilter, wantFilter)
+	}
+}
+
+func TestUpdateClientPermissions_Success(t *testing.T) {
+	client := &models.Client{ID: 8, Email: "client@gmail.com"}
+	updated := &models.Client{
+		ID:    8,
+		Email: "client@gmail.com",
+		Permissions: []models.Permission{
+			{Name: models.PermClientBasic},
+			{Name: models.PermClientTrading},
+		},
+	}
+	calls := 0
+	clientRepo := &mockClientRepo{
+		findByIDFn: func(id uint) (*models.Client, error) {
+			calls++
+			if calls == 1 {
+				return client, nil
+			}
+			return updated, nil
+		},
+		setPermissionsFn: func(c *models.Client, perms []models.Permission) error { return nil },
+	}
+	permRepo := &mockPermRepo{
+		findByNamesForSubjectFn: func(names []string, subjectType string) ([]models.Permission, error) {
+			if subjectType != models.PermissionSubjectClient {
+				t.Errorf("FindByNamesForSubject subjectType = %q, want %q", subjectType, models.PermissionSubjectClient)
+			}
+			return []models.Permission{
+				{Name: models.PermClientBasic},
+				{Name: models.PermClientTrading},
+			}, nil
+		},
+	}
+	svc := newTestClientService(clientRepo, permRepo)
+
+	got, err := svc.UpdateClientPermissions(8, []string{models.PermClientBasic, models.PermClientTrading})
+	if err != nil {
+		t.Fatalf("UpdateClientPermissions() unexpected error: %v", err)
+	}
+	if got == nil || len(got.Permissions) != 2 {
+		t.Fatalf("UpdateClientPermissions() returned %+v, want client with 2 perms", got)
+	}
+}
+
+func TestUpdateClientPermissions_NotFound(t *testing.T) {
+	clientRepo := &mockClientRepo{
+		findByIDFn: func(id uint) (*models.Client, error) { return nil, errors.New("record not found") },
+	}
+	svc := newTestClientService(clientRepo, &mockPermRepo{})
+
+	_, err := svc.UpdateClientPermissions(404, []string{models.PermClientBasic})
+	if err == nil || !strings.Contains(err.Error(), "client not found") {
+		t.Fatalf("UpdateClientPermissions() error = %v, want contains 'client not found'", err)
+	}
+}
+
+func TestNotificationService_SendActivationEmail_DialFailure(t *testing.T) {
+	cfg := &config.Config{FrontendURL: "http://localhost:5173", SMTPHost: "localhost", SMTPPort: 1, SMTPFrom: "noreply@bank.com"}
+	notif := service.NewNotificationService(cfg)
+
+	// Unreachable SMTP server — exercises the body-building branch and the dial error path.
+	if err := notif.SendActivationEmail("user@gmail.com", "User", "tok"); err == nil {
+		t.Fatal("SendActivationEmail() expected dial error, got nil")
+	}
+}
+
 func TestUpdateClientPermissions_WrongSubjectType(t *testing.T) {
 	client := &models.Client{ID: 5, Email: "client@bank.com", Permissions: []models.Permission{}}
 	clientRepo := &mockClientRepo{

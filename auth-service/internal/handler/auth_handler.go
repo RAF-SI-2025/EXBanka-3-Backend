@@ -5,6 +5,7 @@ import (
 
 	authv1 "github.com/RAF-SI-2025/EXBanka-3-Backend/auth-service/gen/proto/auth/v1"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/auth-service/internal/config"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/auth-service/internal/models"
 	authsvc "github.com/RAF-SI-2025/EXBanka-3-Backend/auth-service/internal/service"
 	infrasvc "github.com/RAF-SI-2025/EXBanka-3-Backend/auth-service/internal/service"
 	"google.golang.org/grpc/codes"
@@ -12,15 +13,30 @@ import (
 	"gorm.io/gorm"
 )
 
+// AuthServiceInterface allows handler tests to inject a mock service.
+type AuthServiceInterface interface {
+	Login(email, password string) (string, string, *models.Employee, error)
+	RefreshToken(refreshToken string) (string, string, error)
+	ActivateAccount(token, password, passwordConfirm string) error
+	RequestPasswordReset(email string) error
+	ResetPassword(token, password, passwordConfirm string) error
+	ClientLogin(email, password string) (string, string, *models.Client, error)
+	ActivateClientAccount(token, password, passwordConfirm string) error
+}
+
 type AuthHandler struct {
 	authv1.UnimplementedAuthServiceServer
-	svc *authsvc.AuthService
+	svc AuthServiceInterface
 }
 
 func NewAuthHandler(cfg *config.Config, db *gorm.DB, notifSvc *infrasvc.NotificationService) *AuthHandler {
 	return &AuthHandler{
 		svc: authsvc.NewAuthService(cfg, db, notifSvc),
 	}
+}
+
+func NewAuthHandlerWithService(svc AuthServiceInterface) *AuthHandler {
+	return &AuthHandler{svc: svc}
 }
 
 func (h *AuthHandler) Login(ctx context.Context, req *authv1.LoginRequest) (*authv1.LoginResponse, error) {

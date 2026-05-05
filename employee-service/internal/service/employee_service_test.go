@@ -119,9 +119,13 @@ func (m *mockPermRepo) FindByNamesForSubject(names []string, subjectType string)
 }
 
 type mockActuaryProfileRepo struct {
-	findByEmployeeIDFn   func(employeeID uint) (*models.ActuaryProfile, error)
-	upsertFn             func(profile *models.ActuaryProfile) error
-	deleteByEmployeeIDFn func(employeeID uint) error
+	findByEmployeeIDFn        func(employeeID uint) (*models.ActuaryProfile, error)
+	upsertFn                  func(profile *models.ActuaryProfile) error
+	deleteByEmployeeIDFn      func(employeeID uint) error
+	updateLimitFn             func(employeeID uint, limit *float64) error
+	resetUsedLimitFn          func(employeeID uint) error
+	setNeedApprovalFn         func(employeeID uint, needApproval bool) error
+	resetAllAgentUsedLimitsFn func() (int64, error)
 }
 
 func (m *mockActuaryProfileRepo) FindByEmployeeID(employeeID uint) (*models.ActuaryProfile, error) {
@@ -145,10 +149,33 @@ func (m *mockActuaryProfileRepo) DeleteByEmployeeID(employeeID uint) error {
 	return nil
 }
 
-func (m *mockActuaryProfileRepo) UpdateLimit(_ uint, _ *float64) error      { return nil }
-func (m *mockActuaryProfileRepo) ResetUsedLimit(_ uint) error               { return nil }
-func (m *mockActuaryProfileRepo) SetNeedApproval(_ uint, _ bool) error      { return nil }
-func (m *mockActuaryProfileRepo) ResetAllAgentUsedLimits() (int64, error)   { return 0, nil }
+func (m *mockActuaryProfileRepo) UpdateLimit(employeeID uint, limit *float64) error {
+	if m.updateLimitFn != nil {
+		return m.updateLimitFn(employeeID, limit)
+	}
+	return nil
+}
+
+func (m *mockActuaryProfileRepo) ResetUsedLimit(employeeID uint) error {
+	if m.resetUsedLimitFn != nil {
+		return m.resetUsedLimitFn(employeeID)
+	}
+	return nil
+}
+
+func (m *mockActuaryProfileRepo) SetNeedApproval(employeeID uint, needApproval bool) error {
+	if m.setNeedApprovalFn != nil {
+		return m.setNeedApprovalFn(employeeID, needApproval)
+	}
+	return nil
+}
+
+func (m *mockActuaryProfileRepo) ResetAllAgentUsedLimits() (int64, error) {
+	if m.resetAllAgentUsedLimitsFn != nil {
+		return m.resetAllAgentUsedLimitsFn()
+	}
+	return 0, nil
+}
 
 // ---- mock token repository ----
 
@@ -562,5 +589,389 @@ func TestListActuaryStates_ReturnsAgentsAndSupervisors(t *testing.T) {
 	}
 	if items[1].Limit == nil || *items[1].Limit != 150000 {
 		t.Fatalf("expected agent limit to be preserved, got %+v", items[1])
+	}
+}
+
+// ---- UpdateAgentLimit ----
+
+func TestUpdateAgentLimit_Success(t *testing.T) {
+	emp := &models.Employee{
+		ID:    7,
+		Email: "agent@bank.com",
+		Permissions: []models.Permission{
+			{Name: models.PermEmployeeAgent},
+		},
+	}
+	empRepo := &mockEmployeeRepo{
+		findByIDFn: func(id uint) (*models.Employee, error) { return emp, nil },
+	}
+	called := false
+	actuaryRepo := &mockActuaryProfileRepo{
+		updateLimitFn: func(employeeID uint, limit *float64) error {
+			called = true
+			if employeeID != 7 {
+				t.Errorf("UpdateLimit got employeeID=%d, want 7", employeeID)
+			}
+			return nil
+		},
+	}
+	cfg := &config.Config{FrontendURL: "http://localhost:5173"}
+	svc := service.NewEmployeeServiceWithRepos(cfg, empRepo, actuaryRepo, &mockPermRepo{}, &mockTokenRepo{}, nil)
+
+	limit := 5000.0
+	if err := svc.UpdateAgentLimit(7, &limit); err != nil {
+		t.Fatalf("UpdateAgentLimit() unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("UpdateLimit was not called on the actuary repo")
+	}
+}
+
+func TestUpdateAgentLimit_NotFound(t *testing.T) {
+	empRepo := &mockEmployeeRepo{
+		findByIDFn: func(id uint) (*models.Employee, error) {
+			return nil, errors.New("record not found")
+		},
+	}
+	svc := newTestEmployeeService(empRepo, &mockPermRepo{}, &mockTokenRepo{})
+
+	err := svc.UpdateAgentLimit(99, nil)
+	if err == nil || !strings.Contains(err.Error(), "employee not found") {
+		t.Fatalf("UpdateAgentLimit() error = %v, want contains 'employee not found'", err)
+	}
+}
+
+func TestUpdateAgentLimit_NotActuary(t *testing.T) {
+	emp := &models.Employee{
+		ID:          1,
+		Email:       "basic@bank.com",
+		Permissions: []models.Permission{{Name: models.PermEmployeeBasic}},
+	}
+	empRepo := &mockEmployeeRepo{
+		findByIDFn: func(id uint) (*models.Employee, error) { return emp, nil },
+	}
+	svc := newTestEmployeeService(empRepo, &mockPermRepo{}, &mockTokenRepo{})
+
+	err := svc.UpdateAgentLimit(1, nil)
+	if err == nil || !strings.Contains(err.Error(), "not an actuary") {
+		t.Fatalf("UpdateAgentLimit() error = %v, want contains 'not an actuary'", err)
+	}
+}
+
+func TestUpdateAgentLimit_SupervisorRejected(t *testing.T) {
+	emp := &models.Employee{
+		ID:          2,
+		Email:       "sup@bank.com",
+		Permissions: []models.Permission{{Name: models.PermEmployeeSupervisor}},
+	}
+	empRepo := &mockEmployeeRepo{
+		findByIDFn: func(id uint) (*models.Employee, error) { return emp, nil },
+	}
+	svc := newTestEmployeeService(empRepo, &mockPermRepo{}, &mockTokenRepo{})
+
+	err := svc.UpdateAgentLimit(2, nil)
+	if err == nil || !strings.Contains(err.Error(), "supervisors do not have limits") {
+		t.Fatalf("UpdateAgentLimit() error = %v, want contains 'supervisors do not have limits'", err)
+	}
+}
+
+// ---- ResetAgentUsedLimit ----
+
+func TestResetAgentUsedLimit_Success(t *testing.T) {
+	emp := &models.Employee{
+		ID:          3,
+		Email:       "agent@bank.com",
+		Permissions: []models.Permission{{Name: models.PermEmployeeAgent}},
+	}
+	empRepo := &mockEmployeeRepo{
+		findByIDFn: func(id uint) (*models.Employee, error) { return emp, nil },
+	}
+	called := false
+	actuaryRepo := &mockActuaryProfileRepo{
+		resetUsedLimitFn: func(employeeID uint) error {
+			called = true
+			return nil
+		},
+	}
+	cfg := &config.Config{FrontendURL: "http://localhost:5173"}
+	svc := service.NewEmployeeServiceWithRepos(cfg, empRepo, actuaryRepo, &mockPermRepo{}, &mockTokenRepo{}, nil)
+
+	if err := svc.ResetAgentUsedLimit(3); err != nil {
+		t.Fatalf("ResetAgentUsedLimit() unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("ResetUsedLimit was not called on the actuary repo")
+	}
+}
+
+func TestResetAgentUsedLimit_NotActuary(t *testing.T) {
+	emp := &models.Employee{
+		ID:          4,
+		Email:       "basic@bank.com",
+		Permissions: []models.Permission{{Name: models.PermEmployeeBasic}},
+	}
+	empRepo := &mockEmployeeRepo{
+		findByIDFn: func(id uint) (*models.Employee, error) { return emp, nil },
+	}
+	svc := newTestEmployeeService(empRepo, &mockPermRepo{}, &mockTokenRepo{})
+
+	err := svc.ResetAgentUsedLimit(4)
+	if err == nil || !strings.Contains(err.Error(), "not an actuary") {
+		t.Fatalf("ResetAgentUsedLimit() error = %v, want contains 'not an actuary'", err)
+	}
+}
+
+func TestResetAgentUsedLimit_NotFound(t *testing.T) {
+	empRepo := &mockEmployeeRepo{
+		findByIDFn: func(id uint) (*models.Employee, error) {
+			return nil, errors.New("record not found")
+		},
+	}
+	svc := newTestEmployeeService(empRepo, &mockPermRepo{}, &mockTokenRepo{})
+
+	err := svc.ResetAgentUsedLimit(404)
+	if err == nil || !strings.Contains(err.Error(), "employee not found") {
+		t.Fatalf("ResetAgentUsedLimit() error = %v, want contains 'employee not found'", err)
+	}
+}
+
+// ---- SetNeedApproval ----
+
+func TestSetNeedApproval_Success(t *testing.T) {
+	emp := &models.Employee{
+		ID:          5,
+		Email:       "agent@bank.com",
+		Permissions: []models.Permission{{Name: models.PermEmployeeAgent}},
+	}
+	empRepo := &mockEmployeeRepo{
+		findByIDFn: func(id uint) (*models.Employee, error) { return emp, nil },
+	}
+	var gotNeed bool
+	actuaryRepo := &mockActuaryProfileRepo{
+		setNeedApprovalFn: func(employeeID uint, needApproval bool) error {
+			gotNeed = needApproval
+			return nil
+		},
+	}
+	cfg := &config.Config{FrontendURL: "http://localhost:5173"}
+	svc := service.NewEmployeeServiceWithRepos(cfg, empRepo, actuaryRepo, &mockPermRepo{}, &mockTokenRepo{}, nil)
+
+	if err := svc.SetNeedApproval(5, true); err != nil {
+		t.Fatalf("SetNeedApproval() unexpected error: %v", err)
+	}
+	if !gotNeed {
+		t.Fatal("expected SetNeedApproval to forward needApproval=true")
+	}
+}
+
+func TestSetNeedApproval_SupervisorRejected(t *testing.T) {
+	emp := &models.Employee{
+		ID:          6,
+		Email:       "sup@bank.com",
+		Permissions: []models.Permission{{Name: models.PermEmployeeSupervisor}},
+	}
+	empRepo := &mockEmployeeRepo{
+		findByIDFn: func(id uint) (*models.Employee, error) { return emp, nil },
+	}
+	svc := newTestEmployeeService(empRepo, &mockPermRepo{}, &mockTokenRepo{})
+
+	err := svc.SetNeedApproval(6, true)
+	if err == nil || !strings.Contains(err.Error(), "supervisors always have need_approval=false") {
+		t.Fatalf("SetNeedApproval() error = %v, want supervisor rejection", err)
+	}
+}
+
+func TestSetNeedApproval_NotActuary(t *testing.T) {
+	emp := &models.Employee{
+		ID:          7,
+		Email:       "basic@bank.com",
+		Permissions: []models.Permission{{Name: models.PermEmployeeBasic}},
+	}
+	empRepo := &mockEmployeeRepo{
+		findByIDFn: func(id uint) (*models.Employee, error) { return emp, nil },
+	}
+	svc := newTestEmployeeService(empRepo, &mockPermRepo{}, &mockTokenRepo{})
+
+	err := svc.SetNeedApproval(7, false)
+	if err == nil || !strings.Contains(err.Error(), "not an actuary") {
+		t.Fatalf("SetNeedApproval() error = %v, want contains 'not an actuary'", err)
+	}
+}
+
+func TestSetNeedApproval_NotFound(t *testing.T) {
+	empRepo := &mockEmployeeRepo{
+		findByIDFn: func(id uint) (*models.Employee, error) {
+			return nil, errors.New("record not found")
+		},
+	}
+	svc := newTestEmployeeService(empRepo, &mockPermRepo{}, &mockTokenRepo{})
+
+	err := svc.SetNeedApproval(404, true)
+	if err == nil || !strings.Contains(err.Error(), "employee not found") {
+		t.Fatalf("SetNeedApproval() error = %v, want contains 'employee not found'", err)
+	}
+}
+
+// ---- ResetAllAgentUsedLimits ----
+
+func TestResetAllAgentUsedLimits_DelegatesToRepo(t *testing.T) {
+	called := false
+	actuaryRepo := &mockActuaryProfileRepo{
+		resetAllAgentUsedLimitsFn: func() (int64, error) {
+			called = true
+			return 12, nil
+		},
+	}
+	cfg := &config.Config{FrontendURL: "http://localhost:5173"}
+	svc := service.NewEmployeeServiceWithRepos(cfg, &mockEmployeeRepo{}, actuaryRepo, &mockPermRepo{}, &mockTokenRepo{}, nil)
+
+	n, err := svc.ResetAllAgentUsedLimits()
+	if err != nil {
+		t.Fatalf("ResetAllAgentUsedLimits() unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected ResetAllAgentUsedLimits to delegate to the repo")
+	}
+	if n != 12 {
+		t.Fatalf("ResetAllAgentUsedLimits() n = %d, want 12", n)
+	}
+}
+
+// ---- ListEmployees / GetAllPermissions ----
+
+func TestListEmployees_DelegatesToRepo(t *testing.T) {
+	wantFilter := repository.EmployeeFilter{Email: "x@bank.com", Page: 2, PageSize: 5}
+	var gotFilter repository.EmployeeFilter
+	empRepo := &mockEmployeeRepo{
+		listFn: func(filter repository.EmployeeFilter) ([]models.Employee, int64, error) {
+			gotFilter = filter
+			return []models.Employee{{ID: 1}, {ID: 2}}, 42, nil
+		},
+	}
+	svc := newTestEmployeeService(empRepo, &mockPermRepo{}, &mockTokenRepo{})
+
+	items, total, err := svc.ListEmployees(wantFilter)
+	if err != nil {
+		t.Fatalf("ListEmployees() unexpected error: %v", err)
+	}
+	if total != 42 || len(items) != 2 {
+		t.Fatalf("ListEmployees() = (len=%d, total=%d), want (2, 42)", len(items), total)
+	}
+	if gotFilter != wantFilter {
+		t.Fatalf("ListEmployees() filter = %+v, want %+v", gotFilter, wantFilter)
+	}
+}
+
+func TestGetAllPermissions_FiltersToEmployeeSubject(t *testing.T) {
+	var gotSubject string
+	permRepo := &mockPermRepo{
+		findAllBySubjectFn: func(subjectType string) ([]models.Permission, error) {
+			gotSubject = subjectType
+			return []models.Permission{{Name: models.PermEmployeeBasic}}, nil
+		},
+	}
+	svc := newTestEmployeeService(&mockEmployeeRepo{}, permRepo, &mockTokenRepo{})
+
+	perms, err := svc.GetAllPermissions()
+	if err != nil {
+		t.Fatalf("GetAllPermissions() unexpected error: %v", err)
+	}
+	if len(perms) != 1 {
+		t.Fatalf("GetAllPermissions() len = %d, want 1", len(perms))
+	}
+	if gotSubject != models.PermissionSubjectEmployee {
+		t.Fatalf("GetAllPermissions() subject = %q, want %q", gotSubject, models.PermissionSubjectEmployee)
+	}
+}
+
+// ---- UpdateEmployee success path ----
+
+func TestUpdateEmployee_Success(t *testing.T) {
+	emp := &models.Employee{
+		ID:           5,
+		Email:        "old@bank.com",
+		Username:     "olduser",
+		Permissions:  []models.Permission{{Name: models.PermEmployeeBasic}},
+	}
+	var updated *models.Employee
+	empRepo := &mockEmployeeRepo{
+		findByIDFn: func(id uint) (*models.Employee, error) { return emp, nil },
+		emailExistsFn:    func(email string, excludeID uint) (bool, error) { return false, nil },
+		usernameExistsFn: func(username string, excludeID uint) (bool, error) { return false, nil },
+		updateFn: func(e *models.Employee) error { updated = e; return nil },
+	}
+	svc := newTestEmployeeService(empRepo, &mockPermRepo{}, &mockTokenRepo{})
+
+	input := service.UpdateEmployeeInput{
+		Ime:           "Pera",
+		Prezime:       "Peric",
+		DatumRodjenja: time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC),
+		Pol:           "M",
+		Email:         "new@bank.com",
+		BrojTelefona:  "0641234567",
+		Adresa:        "Adresa 1",
+		Username:      "newuser",
+		Pozicija:      "Clerk",
+		Departman:     "IT",
+		Aktivan:       true,
+	}
+
+	got, err := svc.UpdateEmployee(5, input)
+	if err != nil {
+		t.Fatalf("UpdateEmployee() unexpected error: %v", err)
+	}
+	if got == nil || got.Email != "new@bank.com" || got.Username != "newuser" {
+		t.Fatalf("UpdateEmployee() returned unexpected employee: %+v", got)
+	}
+	if updated == nil {
+		t.Fatal("expected Update to be called on the repo")
+	}
+}
+
+func TestUpdateEmployee_DuplicateEmail(t *testing.T) {
+	emp := &models.Employee{
+		ID:          5,
+		Email:       "old@bank.com",
+		Username:    "olduser",
+		Permissions: []models.Permission{{Name: models.PermEmployeeBasic}},
+	}
+	empRepo := &mockEmployeeRepo{
+		findByIDFn:    func(id uint) (*models.Employee, error) { return emp, nil },
+		emailExistsFn: func(email string, excludeID uint) (bool, error) { return true, nil },
+	}
+	svc := newTestEmployeeService(empRepo, &mockPermRepo{}, &mockTokenRepo{})
+
+	input := service.UpdateEmployeeInput{
+		Ime: "X", Prezime: "Y",
+		DatumRodjenja: time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC),
+		Pol:           "M",
+		Email:         "taken@bank.com",
+		BrojTelefona:  "0641234567",
+		Adresa:        "A",
+		Username:      "olduser",
+		Pozicija:      "Clerk",
+		Departman:     "IT",
+		Aktivan:       true,
+	}
+
+	_, err := svc.UpdateEmployee(5, input)
+	if err == nil || !strings.Contains(err.Error(), "email already in use") {
+		t.Fatalf("UpdateEmployee() error = %v, want 'email already in use'", err)
+	}
+}
+
+// ---- NotificationService extra paths ----
+
+func TestNotificationService_ExtraEmails(t *testing.T) {
+	cfg := &config.Config{FrontendURL: "http://localhost:5173", SMTPHost: "localhost", SMTPPort: 1, SMTPFrom: "noreply@bank.com"}
+	notif := service.NewNotificationService(cfg)
+
+	// All three end up calling sendEmail which will fail to dial — that's fine,
+	// we just want to exercise the body-building branches.
+	if err := notif.SendResetPasswordEmail("user@bank.com", "User", "tok"); err == nil {
+		t.Fatal("SendResetPasswordEmail() expected dial error, got nil")
+	}
+	if err := notif.SendConfirmationEmail("user@bank.com", "User"); err == nil {
+		t.Fatal("SendConfirmationEmail() expected dial error, got nil")
 	}
 }

@@ -15,12 +15,25 @@ import (
 )
 
 type OtcHTTPHandler struct {
-	cfg *config.Config
-	svc *service.OtcService
+	cfg      *config.Config
+	svc      *service.OtcService
+	sagaRepo SagaQuerier
+}
+
+// SagaQuerier is the read-side interface the OTC handler uses to surface the
+// saga progress for an exercise call. Defined locally to avoid an import cycle
+// with the repository package's wider surface.
+type SagaQuerier interface {
+	GetTransaction(id uint) (*models.SagaTransactionRecord, error)
 }
 
 func NewOtcHTTPHandler(cfg *config.Config, svc *service.OtcService) *OtcHTTPHandler {
 	return &OtcHTTPHandler{cfg: cfg, svc: svc}
+}
+
+func (h *OtcHTTPHandler) WithSagaQuerier(q SagaQuerier) *OtcHTTPHandler {
+	h.sagaRepo = q
+	return h
 }
 
 func (h *OtcHTTPHandler) OtcRoutes(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +66,28 @@ func (h *OtcHTTPHandler) OtcRoutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.listContracts(w, r)
+	case len(parts) == 3 && parts[0] == "contracts" && parts[2] == "exercise":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		contractID, err := strconv.ParseUint(parts[1], 10, 64)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid contract id"})
+			return
+		}
+		h.exerciseContract(w, r, uint(contractID))
+	case len(parts) == 2 && parts[0] == "saga":
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		sagaID, err := strconv.ParseUint(parts[1], 10, 64)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid saga id"})
+			return
+		}
+		h.getSagaStatus(w, r, uint(sagaID))
 	case len(parts) == 2 && parts[0] == "offers":
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -312,6 +347,66 @@ func (h *OtcHTTPHandler) updateOfferStatus(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]interface{}{"offer": otcOfferToResponse(*offer)})
 }
 
+func (h *OtcHTTPHandler) exerciseContract(w http.ResponseWriter, r *http.Request, contractID uint) {
+	claims, ok := requireAuthenticatedHTTP(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireTradingAccessHTTP(w, claims) {
+		return
+	}
+
+	buyerID, buyerType := callerIdentity(claims)
+	result, err := h.svc.ExerciseContract(contractID, buyerID, buyerType)
+	if err != nil {
+		if errors.Is(err, service.ErrOtcContractNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "contract not found"})
+			return
+		}
+		// Even on saga failure we may have a saga id to surface.
+		status := http.StatusBadRequest
+		body := map[string]interface{}{"message": err.Error()}
+		if result != nil && result.SagaID != 0 {
+			body["sagaId"] = result.SagaID
+		}
+		writeJSON(w, status, body)
+		return
+	}
+
+	body := map[string]interface{}{
+		"sagaId": result.SagaID,
+	}
+	if result.Contract != nil {
+		body["contract"] = otcContractToResponse(*result.Contract)
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+func (h *OtcHTTPHandler) getSagaStatus(w http.ResponseWriter, r *http.Request, sagaID uint) {
+	claims, ok := requireAuthenticatedHTTP(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireTradingAccessHTTP(w, claims) {
+		return
+	}
+	if h.sagaRepo == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "saga query unavailable"})
+		return
+	}
+
+	saga, err := h.sagaRepo.GetTransaction(sagaID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to load saga"})
+		return
+	}
+	if saga == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "saga not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"saga": sagaTransactionToResponse(*saga)})
+}
+
 func (h *OtcHTTPHandler) counterOffer(w http.ResponseWriter, r *http.Request, offerID uint) {
 	claims, ok := requireAuthenticatedHTTP(w, r, h.cfg)
 	if !ok {
@@ -533,4 +628,52 @@ type badRequestError struct {
 
 func (e *badRequestError) Error() string {
 	return e.message
+}
+
+type sagaStepResponse struct {
+	StepNumber   int    `json:"stepNumber"`
+	Name         string `json:"name"`
+	Status       string `json:"status"`
+	ExecutedAt   string `json:"executedAt,omitempty"`
+	ErrorMessage string `json:"errorMessage,omitempty"`
+}
+
+type sagaTransactionResponse struct {
+	ID          uint               `json:"id"`
+	Type        string             `json:"type"`
+	Status      string             `json:"status"`
+	CurrentStep int                `json:"currentStep"`
+	RetryCount  int                `json:"retryCount"`
+	Error       string             `json:"error,omitempty"`
+	CreatedAt   string             `json:"createdAt"`
+	UpdatedAt   string             `json:"updatedAt"`
+	Steps       []sagaStepResponse `json:"steps"`
+}
+
+func sagaTransactionToResponse(saga models.SagaTransactionRecord) sagaTransactionResponse {
+	steps := make([]sagaStepResponse, 0, len(saga.Steps))
+	for _, step := range saga.Steps {
+		executedAt := ""
+		if step.ExecutedAt != nil {
+			executedAt = step.ExecutedAt.UTC().Format(time.RFC3339)
+		}
+		steps = append(steps, sagaStepResponse{
+			StepNumber:   step.StepNumber,
+			Name:         step.StepName,
+			Status:       step.Status,
+			ExecutedAt:   executedAt,
+			ErrorMessage: step.ErrorMessage,
+		})
+	}
+	return sagaTransactionResponse{
+		ID:          saga.ID,
+		Type:        saga.Type,
+		Status:      saga.Status,
+		CurrentStep: saga.CurrentStep,
+		RetryCount:  saga.RetryCount,
+		Error:       saga.Error,
+		CreatedAt:   saga.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:   saga.UpdatedAt.UTC().Format(time.RFC3339),
+		Steps:       steps,
+	}
 }
