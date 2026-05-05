@@ -14,7 +14,9 @@ import (
 
 // StartCronJobs sets up and starts the cron scheduler for the exchange service.
 // portfolioSvc is created in main and shared with the portfolio HTTP handler.
-func StartCronJobs(db *gorm.DB, portfolioSvc *PortfolioService, rateProvider RateProviderInterface) *cron.Cron {
+// sagaRetry is optional; when non-nil it is invoked every 5 minutes to retry
+// stuck SAGA compensations.
+func StartCronJobs(db *gorm.DB, portfolioSvc *PortfolioService, rateProvider RateProviderInterface, sagaRetry *SagaRetryRunner) *cron.Cron {
 	c := cron.New()
 
 	// Refresh listing prices every 15 minutes.
@@ -43,6 +45,16 @@ func StartCronJobs(db *gorm.DB, portfolioSvc *PortfolioService, rateProvider Rat
 	})
 	if err != nil {
 		slog.Error("Failed to add OTC expiry cron job", "error", err)
+	}
+
+	// SAGA retry: re-run compensations for sagas stuck in rolling_back.
+	if sagaRetry != nil {
+		_, err = c.AddFunc("@every 5m", func() {
+			sagaRetry.Run()
+		})
+		if err != nil {
+			slog.Error("Failed to add SAGA retry cron job", "error", err)
+		}
 	}
 
 	// Monthly tax collection: runs at 02:00 on the 1st of each month.

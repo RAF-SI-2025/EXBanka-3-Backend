@@ -10,13 +10,17 @@ import (
 )
 
 type ClientAuthHandler struct {
-	svc *authsvc.AuthService
+	svc AuthServiceInterface
 }
 
 func NewClientAuthHandler(cfg *config.Config, db *gorm.DB, notifSvc *authsvc.NotificationService) *ClientAuthHandler {
 	return &ClientAuthHandler{
 		svc: authsvc.NewAuthService(cfg, db, notifSvc),
 	}
+}
+
+func NewClientAuthHandlerWithService(svc AuthServiceInterface) *ClientAuthHandler {
+	return &ClientAuthHandler{svc: svc}
 }
 
 type clientLoginRequest struct {

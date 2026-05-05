@@ -9,15 +9,24 @@ import (
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/repository"
 )
 
-var ErrOtcOfferNotFound = errors.New("otc offer not found")
+var (
+	ErrOtcOfferNotFound    = errors.New("otc offer not found")
+	ErrOtcContractNotFound = errors.New("otc contract not found")
+)
 
 type OtcService struct {
 	portfolioRepo *repository.PortfolioRepository
 	otcRepo       *repository.OtcRepository
+	orchestrator  *SagaOrchestrator
 }
 
 func NewOtcService(portfolioRepo *repository.PortfolioRepository, otcRepo *repository.OtcRepository) *OtcService {
 	return &OtcService{portfolioRepo: portfolioRepo, otcRepo: otcRepo}
+}
+
+func (s *OtcService) WithOrchestrator(orchestrator *SagaOrchestrator) *OtcService {
+	s.orchestrator = orchestrator
+	return s
 }
 
 type PublicOtcStock struct {
@@ -271,6 +280,62 @@ func (s *OtcService) ExpireDueContracts(referenceTime time.Time) (int, error) {
 		referenceTime = time.Now().UTC()
 	}
 	return s.otcRepo.ExpireValidContracts(referenceTime.UTC())
+}
+
+type ExerciseContractResult struct {
+	SagaID   uint
+	Contract *models.OtcContractRecord
+}
+
+// ExerciseContract validates that the caller is the buyer on a still-valid,
+// not-yet-expired OTC contract and runs the 5-step exercise saga. Returns the
+// saga ID so the caller can poll progress.
+func (s *OtcService) ExerciseContract(contractID, buyerID uint, buyerType string) (*ExerciseContractResult, error) {
+	if s.orchestrator == nil {
+		return nil, fmt.Errorf("saga orchestrator is not configured")
+	}
+	if !hasParticipantIdentity(buyerID, buyerType) {
+		return nil, fmt.Errorf("buyer identity is required")
+	}
+	if contractID == 0 {
+		return nil, fmt.Errorf("contract id is required")
+	}
+
+	contract, err := s.otcRepo.GetContractByID(contractID)
+	if err != nil {
+		return nil, err
+	}
+	if contract == nil {
+		return nil, ErrOtcContractNotFound
+	}
+	if contract.BuyerID != buyerID || contract.BuyerType != buyerType {
+		return nil, ErrOtcContractNotFound
+	}
+	if contract.Status != models.OtcContractStatusValid {
+		return nil, fmt.Errorf("contract is not in a valid state")
+	}
+	now := time.Now().UTC()
+	settlementEnd := contract.SettlementDate.Add(24 * time.Hour)
+	if !settlementEnd.After(now) {
+		return nil, fmt.Errorf("contract settlement window has passed")
+	}
+
+	payload, err := MarshalOtcExercisePayload(contract)
+	if err != nil {
+		return nil, err
+	}
+
+	steps := BuildOtcExerciseSteps(contract)
+	sagaID, runErr := s.orchestrator.Run(models.SagaTypeOtcExercise, payload, steps)
+	if runErr != nil {
+		return &ExerciseContractResult{SagaID: sagaID, Contract: contract}, runErr
+	}
+
+	finalContract, err := s.otcRepo.GetContractByID(contractID)
+	if err != nil {
+		return &ExerciseContractResult{SagaID: sagaID, Contract: contract}, err
+	}
+	return &ExerciseContractResult{SagaID: sagaID, Contract: finalContract}, nil
 }
 
 func (s *OtcService) GetOfferForParticipant(offerID uint, userID uint, userType string) (*models.OtcOfferRecord, error) {
