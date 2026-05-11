@@ -83,6 +83,10 @@ func (m *mockEmployeeRepo) SetPermissions(emp *models.Employee, permissions []mo
 	return nil
 }
 
+func (m *mockEmployeeRepo) ReassignFundsManagedBy(oldManagerID, newManagerID uint) (int64, error) {
+	return 0, nil
+}
+
 func (m *mockEmployeeRepo) EmailExists(email string, excludeID uint) (bool, error) {
 	if m.emailExistsFn != nil {
 		return m.emailExistsFn(email, excludeID)

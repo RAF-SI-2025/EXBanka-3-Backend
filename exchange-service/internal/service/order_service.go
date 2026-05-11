@@ -190,6 +190,12 @@ func (s *OrderService) resolveStatus(input CreateOrderInput, totalPrice float64)
 	if input.UserType == "client" {
 		return "approved", false, nil
 	}
+	// Fund orders are placed by a supervisor on behalf of a fund and are
+	// always auto-approved — the supervisor has already passed the fund
+	// authorization checks before reaching here.
+	if input.UserType == "fund" {
+		return "approved", false, nil
+	}
 
 	// Bank orders: check the placing agent's actuary profile.
 	profile, err := s.orderRepo.GetActuaryProfile(input.ActorID)
@@ -377,11 +383,14 @@ func (s *OrderService) ListTransactionsForOrder(orderID uint) ([]models.OrderTra
 // --- Helpers ---
 
 func validateOrderInput(input CreateOrderInput) error {
-	if input.UserType != "client" && input.UserType != "bank" {
-		return fmt.Errorf("user type must be 'client' or 'bank'")
+	if input.UserType != "client" && input.UserType != "bank" && input.UserType != "fund" {
+		return fmt.Errorf("user type must be 'client', 'bank', or 'fund'")
 	}
 	if input.UserType == "client" && input.UserID == 0 {
 		return fmt.Errorf("user ID is required")
+	}
+	if input.UserType == "fund" && input.UserID == 0 {
+		return fmt.Errorf("fund ID is required")
 	}
 	if input.AssetTicker == "" {
 		return fmt.Errorf("asset ticker is required")

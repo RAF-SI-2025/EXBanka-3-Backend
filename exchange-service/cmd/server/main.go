@@ -62,7 +62,10 @@ func main() {
 	sagaOrchestrator := service.NewSagaOrchestrator(sagaRepo, db)
 	sagaRetryRunner := service.NewSagaRetryRunner(sagaRepo, otcRepo, sagaOrchestrator)
 
-	cronScheduler := service.StartCronJobs(db, portfolioSvc, rateProvider, sagaRetryRunner)
+	fundRepo := repository.NewFundRepository(db)
+	fundSvc := service.NewFundService(fundRepo, portfolioRepo, marketRepo, orderRepo, rateProvider)
+
+	cronScheduler := service.StartCronJobs(db, portfolioSvc, rateProvider, sagaRetryRunner, fundSvc)
 
 	go func() {
 		slog.Info("Running market data seed in background...")
@@ -78,13 +81,15 @@ func main() {
 	marketH := handler.NewMarketHTTPHandler(cfg, marketSvc, marketRepo)
 
 	orderSvc := service.NewOrderService(orderRepo, marketRepo, rateProvider)
-	orderH := handler.NewOrderHTTPHandler(cfg, orderSvc)
+	orderH := handler.NewOrderHTTPHandler(cfg, orderSvc).WithFundService(fundSvc)
 	portfolioH := handler.NewPortfolioHTTPHandler(cfg, portfolioSvc)
 	otcSvc := service.NewOtcService(portfolioRepo, otcRepo).WithOrchestrator(sagaOrchestrator)
 	otcH := handler.NewOtcHTTPHandler(cfg, otcSvc).WithSagaQuerier(sagaRepo)
 
 	taxCollector := service.NewTaxCollector(taxSvc, orderRepo, taxRepo)
 	taxH := handler.NewTaxHTTPHandler(cfg, taxSvc, taxCollector)
+
+	fundH := handler.NewFundHTTPHandler(cfg, fundSvc)
 
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
@@ -132,6 +137,8 @@ func main() {
 	httpMux.Handle("/api/v1/orders", middleware.CORS(http.HandlerFunc(orderH.OrdersCollection)))
 	httpMux.Handle("/api/v1/orders/", middleware.CORS(http.HandlerFunc(orderH.OrderRoutes)))
 	httpMux.Handle("/api/v1/tax/", middleware.CORS(http.HandlerFunc(taxH.TaxRoutes)))
+	httpMux.Handle("/api/v1/funds", middleware.CORS(http.HandlerFunc(fundH.FundRoutes)))
+	httpMux.Handle("/api/v1/funds/", middleware.CORS(http.HandlerFunc(fundH.FundRoutes)))
 	httpMux.Handle("/", middleware.CORS(gwMux))
 
 	httpServer := &http.Server{

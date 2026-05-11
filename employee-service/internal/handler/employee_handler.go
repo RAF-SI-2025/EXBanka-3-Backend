@@ -6,6 +6,7 @@ import (
 
 	employeev1 "github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/gen/proto/employee/v1"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/config"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/middleware"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/models"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/repository"
 	svc "github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/service"
@@ -166,7 +167,11 @@ func (h *EmployeeHandler) SetEmployeeActive(ctx context.Context, req *employeev1
 }
 
 func (h *EmployeeHandler) UpdateEmployeePermissions(ctx context.Context, req *employeev1.UpdateEmployeePermissionsRequest) (*employeev1.UpdateEmployeePermissionsResponse, error) {
-	emp, err := h.svc.UpdateEmployeePermissions(uint(req.Id), req.PermissionNames)
+	var actorID uint
+	if claims, ok := middleware.GetClaimsFromContext(ctx); ok && claims != nil {
+		actorID = claims.EmployeeID
+	}
+	emp, err := h.svc.UpdateEmployeePermissionsBy(uint(req.Id), req.PermissionNames, actorID)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%s", err.Error())
 	}

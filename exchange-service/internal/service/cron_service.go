@@ -16,7 +16,7 @@ import (
 // portfolioSvc is created in main and shared with the portfolio HTTP handler.
 // sagaRetry is optional; when non-nil it is invoked every 5 minutes to retry
 // stuck SAGA compensations.
-func StartCronJobs(db *gorm.DB, portfolioSvc *PortfolioService, rateProvider RateProviderInterface, sagaRetry *SagaRetryRunner) *cron.Cron {
+func StartCronJobs(db *gorm.DB, portfolioSvc *PortfolioService, rateProvider RateProviderInterface, sagaRetry *SagaRetryRunner, fundSvc *FundService) *cron.Cron {
 	c := cron.New()
 
 	// Refresh listing prices every 15 minutes.
@@ -74,6 +74,20 @@ func StartCronJobs(db *gorm.DB, portfolioSvc *PortfolioService, rateProvider Rat
 	})
 	if err != nil {
 		slog.Error("Failed to add tax collection cron job", "error", err)
+	}
+
+	// Daily fund performance snapshot: runs at 23:55 UTC every day.
+	if fundSvc != nil {
+		_, err = c.AddFunc("55 23 * * *", func() {
+			if err := fundSvc.RecordDailyPerformance(time.Now().UTC()); err != nil {
+				slog.Error("Failed to record fund performance snapshots", "error", err)
+				return
+			}
+			slog.Info("Recorded daily fund performance snapshots")
+		})
+		if err != nil {
+			slog.Error("Failed to add fund snapshot cron job", "error", err)
+		}
 	}
 
 	c.Start()

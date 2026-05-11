@@ -121,3 +121,15 @@ func (r *EmployeeRepository) UsernameExists(username string, excludeID uint) (bo
 		Count(&count).Error
 	return count > 0, err
 }
+
+// ReassignFundsManagedBy moves every investment fund managed by oldManagerID to
+// be managed by newManagerID. Uses a raw UPDATE because the investment_funds
+// table is owned by the exchange-service but shares the database; only the
+// manager_id column is touched here.
+func (r *EmployeeRepository) ReassignFundsManagedBy(oldManagerID, newManagerID uint) (int64, error) {
+	res := r.db.Exec(
+		"UPDATE investment_funds SET manager_id = ?, updated_at = NOW() WHERE manager_id = ?",
+		newManagerID, oldManagerID,
+	)
+	return res.RowsAffected, res.Error
+}

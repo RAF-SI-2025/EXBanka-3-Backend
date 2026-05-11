@@ -229,9 +229,25 @@ func (s *EmployeeService) SetEmployeeActive(id uint, aktivan bool) error {
 }
 
 func (s *EmployeeService) UpdateEmployeePermissions(id uint, permissionNames []string) (*models.Employee, error) {
+	return s.UpdateEmployeePermissionsBy(id, permissionNames, 0)
+}
+
+// UpdateEmployeePermissionsBy is the same as UpdateEmployeePermissions but
+// records the actor performing the change. When the supervisor permission is
+// removed from `id`, every investment fund managed by that employee is
+// reassigned to `actorID` so funds are never left orphaned.
+func (s *EmployeeService) UpdateEmployeePermissionsBy(id uint, permissionNames []string, actorID uint) (*models.Employee, error) {
 	emp, err := s.employeeRepo.FindByID(id)
 	if err != nil {
 		return nil, fmt.Errorf("employee not found")
+	}
+
+	hadSupervisor := false
+	for _, p := range emp.Permissions {
+		if p.Name == models.PermEmployeeSupervisor {
+			hadSupervisor = true
+			break
+		}
 	}
 
 	perms, err := s.permRepo.FindByNamesForSubject(permissionNames, models.PermissionSubjectEmployee)
@@ -242,8 +258,25 @@ func (s *EmployeeService) UpdateEmployeePermissions(id uint, permissionNames []s
 		return nil, fmt.Errorf("employees can only be assigned employee permissions")
 	}
 
+	hasSupervisor := false
+	for _, p := range perms {
+		if p.Name == models.PermEmployeeSupervisor {
+			hasSupervisor = true
+			break
+		}
+	}
+
 	if err := s.employeeRepo.SetPermissions(emp, perms); err != nil {
 		return nil, err
+	}
+
+	// Supervisor demoted: reassign funds to the admin doing the change so they
+	// don't become orphaned. Done after the permission swap so a future read
+	// of fund.manager_id reflects the new owner.
+	if hadSupervisor && !hasSupervisor && actorID != 0 {
+		if _, err := s.employeeRepo.ReassignFundsManagedBy(id, actorID); err != nil {
+			return nil, fmt.Errorf("permisije promenjene, ali reasignacija fondova nije uspela: %w", err)
+		}
 	}
 
 	updated, err := s.employeeRepo.FindByID(id)

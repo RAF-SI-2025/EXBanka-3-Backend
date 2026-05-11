@@ -14,6 +14,7 @@ type EmployeeRepositoryInterface interface {
 	SetPermissions(emp *models.Employee, permissions []models.Permission) error
 	EmailExists(email string, excludeID uint) (bool, error)
 	UsernameExists(username string, excludeID uint) (bool, error)
+	ReassignFundsManagedBy(oldManagerID, newManagerID uint) (int64, error)
 }
 
 // PermissionRepositoryInterface defines the methods used by EmployeeService.

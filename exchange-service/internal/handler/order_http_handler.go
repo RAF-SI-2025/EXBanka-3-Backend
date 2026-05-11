@@ -14,12 +14,20 @@ import (
 )
 
 type OrderHTTPHandler struct {
-	cfg *config.Config
-	svc *service.OrderService
+	cfg     *config.Config
+	svc     *service.OrderService
+	fundSvc *service.FundService
 }
 
 func NewOrderHTTPHandler(cfg *config.Config, svc *service.OrderService) *OrderHTTPHandler {
 	return &OrderHTTPHandler{cfg: cfg, svc: svc}
+}
+
+// WithFundService wires the optional fund service used to validate
+// supervisor buy orders placed on behalf of an investment fund.
+func (h *OrderHTTPHandler) WithFundService(fundSvc *service.FundService) *OrderHTTPHandler {
+	h.fundSvc = fundSvc
+	return h
 }
 
 // OrdersCollection handles /api/v1/orders (no trailing ID).
@@ -94,6 +102,27 @@ func (h *OrderHTTPHandler) createOrder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID, userType := callerIdentity(claims)
+
+	// Supervisor placing a buy order for an investment fund: hijack the user
+	// identity so the order is owned by the fund (not the bank). Validation
+	// (supervisor manages the fund, account belongs to fund) happens here.
+	if body.FundID != 0 {
+		if h.fundSvc == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "fund service not available"})
+			return
+		}
+		if claims.TokenSource != "employee" || !util.HasPermission(claims, models.PermEmployeeSupervisor) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"message": "samo supervisor moze trgovati za fond"})
+			return
+		}
+		fund, err := h.fundSvc.ValidateFundBuyOrder(body.FundID, claims.EmployeeID, body.AccountID, "")
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+			return
+		}
+		userID = fund.ID
+		userType = models.PortfolioOwnerFund
+	}
 
 	// Auto-detect order type from provided values when the client sends "market".
 	// Both values → stop_limit; limit only → limit; stop only → stop.
@@ -375,6 +404,10 @@ type createOrderRequest struct {
 	IsMargin     bool     `json:"isMargin"`
 	AccountID    uint     `json:"accountId"`
 	AfterHours   bool     `json:"afterHours"`
+	// FundID is set when a supervisor places a buy order on behalf of an
+	// investment fund — the order is then owned by the fund (UserType="fund",
+	// UserID=fund.ID) instead of the bank.
+	FundID uint `json:"fundId"`
 }
 
 type orderResponse struct {
