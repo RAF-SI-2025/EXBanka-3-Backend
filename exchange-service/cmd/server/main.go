@@ -117,7 +117,7 @@ func main() {
 
 	fundH := handler.NewFundHTTPHandler(cfg, fundSvc)
 
-	ibOtcLocalH := handler.NewInterbankOtcHTTPHandler(cfg, ibRegistry, ibClient, ibNegRepo)
+	ibOtcLocalH := handler.NewInterbankOtcHTTPHandler(cfg, ibRegistry, ibClient, ibNegRepo, ibNegH)
 
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(

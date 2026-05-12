@@ -1,6 +1,7 @@
 package interbank
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -10,16 +11,37 @@ import (
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
 )
 
-// accept handles GET /negotiations/{routingNumber}/{id}/accept.
-// Per spec §3.6 this is a GET that mutates state — accepting an
-// open negotiation closes it and triggers an outbound NEW_TX from
-// the seller's bank to the buyer's bank carrying the four postings
-// that move the premium and create the option contract.
+// AcceptOutcome is the structured result of a runAcceptDispatch call.
+// It lets the two HTTP entry points (partner-triggered /accept and the
+// local-frontend POST /api/v1/interbank-otc/.../accept) translate the
+// same dispatch outcome into their own response conventions.
+type AcceptOutcome struct {
+	// Vote is the buyer-bank's response to NEW_TX, or nil if NEW_TX
+	// never got a reply (transport failure). On Vote=NO and on
+	// transport failure the negotiation has been reopened.
+	Vote *TransactionVote
+
+	// DispatchErr is non-nil when NEW_TX itself failed (network, 5xx,
+	// 202-poll timeout). The negotiation has been reopened.
+	DispatchErr error
+
+	// CommitErr is non-nil when NEW_TX returned YES but the follow-up
+	// COMMIT_TX failed. The negotiation stays closed — operator
+	// action is required (the buyer's bank has already promised to
+	// hold the resources for our YES vote).
+	CommitErr error
+}
+
+// accept handles GET /negotiations/{routingNumber}/{id}/accept (the
+// partner-triggered entry point). Per spec §3.6 this is a GET that
+// mutates state — accepting an open negotiation closes it and triggers
+// an outbound NEW_TX from the seller's bank to the buyer's bank
+// carrying the four postings that move the premium and create the
+// option contract.
 //
-// Only the seller's bank can accept (this mirrors the existing
-// local OTC-5 rule). Both NEW_TX and a follow-up COMMIT_TX are
-// dispatched here; on a NO vote we send ROLLBACK_TX and reopen
-// the negotiation so the participants can keep haggling.
+// Only the seller's bank can accept (mirrors the local OTC-5 rule).
+// Authz here checks the calling partner; the actual dispatch logic
+// is shared with AcceptForLocalSeller via runAcceptDispatch.
 func (h *NegotiationsHandler) accept(w http.ResponseWriter, r *http.Request, routing RoutingNumber, id string) {
 	partner := PartnerFromContext(r.Context())
 	if partner == nil {
@@ -50,55 +72,110 @@ func (h *NegotiationsHandler) accept(w http.ResponseWriter, r *http.Request, rou
 		return
 	}
 
-	// Close locally first so a concurrent second accept can't double-spend.
-	if err := h.repo.MarkClosed(int(routing), id); err != nil {
-		writeProblemJSON(w, http.StatusInternalServerError, fmt.Sprintf("closing negotiation: %v", err))
-		return
+	outcome := h.runAcceptDispatch(r.Context(), neg)
+	switch {
+	case outcome.DispatchErr != nil:
+		writeProblemJSON(w, http.StatusBadGateway, fmt.Sprintf("dispatching NEW_TX: %v", outcome.DispatchErr))
+	case outcome.Vote != nil && outcome.Vote.Vote != VoteYes:
+		writeJSON(w, http.StatusConflict, outcome.Vote)
+	case outcome.CommitErr != nil:
+		writeProblemJSON(w, http.StatusBadGateway,
+			fmt.Sprintf("buyer voted YES but COMMIT_TX failed; operator action required: %v", outcome.CommitErr))
+	default:
+		writeJSON(w, http.StatusOK, outcome.Vote)
+	}
+}
+
+// AcceptForLocalSeller is the local-frontend analogue of accept(). It
+// validates that the caller's local seller id matches the negotiation
+// and that the negotiation is in a state to be accepted, then runs the
+// same dispatch as the partner-triggered path.
+//
+// statusCode > 0 means a precondition failed and the dispatch was not
+// run; the caller should return that status with errMsg as the body.
+// statusCode == 0 means dispatch ran and outcome carries the result.
+func (h *NegotiationsHandler) AcceptForLocalSeller(
+	ctx context.Context,
+	routing RoutingNumber,
+	id string,
+	localSellerID string,
+) (outcome AcceptOutcome, statusCode int, errMsg string) {
+	neg, err := h.repo.Get(int(routing), id)
+	if err != nil {
+		return AcceptOutcome{}, http.StatusInternalServerError, fmt.Sprintf("loading negotiation: %v", err)
+	}
+	if neg == nil {
+		return AcceptOutcome{}, http.StatusNotFound, "no such negotiation"
+	}
+	if neg.LocalRole != models.InterbankNegotiationRoleSeller {
+		return AcceptOutcome{}, http.StatusForbidden,
+			"only the local seller may accept — for buyer-side acceptance, the seller's bank must trigger the accept"
+	}
+	if neg.SellerID != localSellerID {
+		return AcceptOutcome{}, http.StatusForbidden, "you are not the seller on that negotiation"
+	}
+	if !neg.IsOngoing {
+		return AcceptOutcome{}, http.StatusConflict, "negotiation is no longer ongoing"
+	}
+
+	return h.runAcceptDispatch(ctx, neg), 0, ""
+}
+
+// runAcceptDispatch performs the close-and-dispatch sequence shared by
+// the two accept entry points. Preconditions checked by the caller:
+//   - neg loaded and IsOngoing == true
+//   - neg.LocalRole == seller
+//   - operator (partner or local user) is authorised to accept
+//
+// On NEW_TX transport failure or a NO vote, the negotiation is
+// reopened so participants can resume haggling. On a YES vote followed
+// by a COMMIT_TX failure the negotiation stays closed — the buyer's
+// bank has already promised to hold the resources for our YES vote,
+// so reopening would risk double-spend.
+func (h *NegotiationsHandler) runAcceptDispatch(ctx context.Context, neg *models.InterbankOtcNegotiation) AcceptOutcome {
+	// Close locally first so a concurrent second accept can't
+	// double-dispatch.
+	if err := h.repo.MarkClosed(neg.NegotiationRoutingNumber, neg.NegotiationID); err != nil {
+		return AcceptOutcome{DispatchErr: fmt.Errorf("closing negotiation: %w", err)}
 	}
 
 	tx := buildOptionAcceptanceTx(h.registry.OwnRoutingNumber(), neg)
-
 	txKey := h.client.NewIdempotenceKey()
 	buyerCode := RoutingNumber(neg.BuyerRoutingNumber)
 
-	vote, err := h.client.SendNewTx(r.Context(), buyerCode, txKey, &tx)
+	vote, err := h.client.SendNewTx(ctx, buyerCode, txKey, &tx)
 	if err != nil {
-		// Network or partner error — reopen the negotiation so the
-		// seller can decide whether to retry from the UI.
-		slog.Error("interbank: NEW_TX dispatch failed during /accept",
-			"err", err, "negotiation", id, "buyer", buyerCode)
-		h.reopenAfterDispatchFailure(int(routing), id, neg.LastModifiedByRoutingNumber, neg.LastModifiedByID)
-		writeProblemJSON(w, http.StatusBadGateway, fmt.Sprintf("dispatching NEW_TX: %v", err))
-		return
+		slog.Error("interbank: NEW_TX dispatch failed during accept",
+			"err", err, "negotiation", neg.NegotiationID, "buyer", buyerCode)
+		h.reopenAfterDispatchFailure(neg.NegotiationRoutingNumber, neg.NegotiationID,
+			neg.LastModifiedByRoutingNumber, neg.LastModifiedByID)
+		return AcceptOutcome{DispatchErr: err}
 	}
 
 	if vote.Vote != VoteYes {
-		// Buyer's bank refused — the negotiation should reopen so the
-		// participants can keep going. We don't send ROLLBACK_TX
-		// because NEW_TX with vote=NO is itself the rollback; the
-		// buyer's bank holds no resources after a NO.
-		slog.Info("interbank: NEW_TX received NO vote during /accept",
-			"negotiation", id, "buyer", buyerCode, "reasons", vote.Reasons)
-		h.reopenAfterDispatchFailure(int(routing), id, neg.LastModifiedByRoutingNumber, neg.LastModifiedByID)
-		writeJSON(w, http.StatusConflict, vote)
-		return
+		// Buyer's bank refused — we don't send ROLLBACK_TX because
+		// NEW_TX with vote=NO is itself the rollback; the buyer's
+		// bank holds no resources after a NO. Reopen so participants
+		// can keep going.
+		slog.Info("interbank: NEW_TX received NO vote during accept",
+			"negotiation", neg.NegotiationID, "buyer", buyerCode, "reasons", vote.Reasons)
+		h.reopenAfterDispatchFailure(neg.NegotiationRoutingNumber, neg.NegotiationID,
+			neg.LastModifiedByRoutingNumber, neg.LastModifiedByID)
+		return AcceptOutcome{Vote: vote}
 	}
 
-	// YES vote — commit. If COMMIT_TX itself fails after retries,
-	// we surface the error but leave the negotiation closed: the
-	// buyer's bank has already voted to hold the resources, so the
-	// resolution is operator-driven (CHECK_STATUS / replay), not
-	// reopening the negotiation.
+	// YES vote — commit. If COMMIT_TX itself fails after retries we
+	// leave the negotiation closed; the buyer's bank has already
+	// voted to hold the resources, so resolution is operator-driven
+	// (CHECK_STATUS / replay), not reopening the negotiation.
 	commitKey := h.client.NewIdempotenceKey()
-	if err := h.client.SendCommitTx(r.Context(), buyerCode, commitKey, tx.TransactionID); err != nil {
+	if err := h.client.SendCommitTx(ctx, buyerCode, commitKey, tx.TransactionID); err != nil {
 		slog.Error("interbank: COMMIT_TX dispatch failed after YES vote",
-			"err", err, "negotiation", id, "transaction", tx.TransactionID.ID, "buyer", buyerCode)
-		writeProblemJSON(w, http.StatusBadGateway,
-			fmt.Sprintf("buyer voted YES but COMMIT_TX failed; operator action required: %v", err))
-		return
+			"err", err, "negotiation", neg.NegotiationID, "transaction", tx.TransactionID.ID, "buyer", buyerCode)
+		return AcceptOutcome{Vote: vote, CommitErr: err}
 	}
 
-	writeJSON(w, http.StatusOK, vote)
+	return AcceptOutcome{Vote: vote}
 }
 
 // buildOptionAcceptanceTx builds the protocol Transaction that
@@ -170,9 +247,6 @@ func buildOptionAcceptanceTx(ownRouting RoutingNumber, neg *models.InterbankOtcN
 // prior offer state — the most recent terms stay on record, just
 // re-marked open.
 func (h *NegotiationsHandler) reopenAfterDispatchFailure(routing int, id string, lastModRouting int, lastModID string) {
-	// Reuse UpdateTerms to bump updated_at; the LastModifiedBy lands back
-	// on whoever it was before so the wire copy looks unchanged from
-	// the participants' perspective.
 	if err := h.repo.MarkOngoing(routing, id, lastModRouting, lastModID); err != nil {
 		slog.Error("interbank: reopening negotiation after dispatch failure",
 			"err", err, "negotiation", id)

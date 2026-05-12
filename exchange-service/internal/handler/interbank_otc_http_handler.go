@@ -27,10 +27,11 @@ import (
 // in package interbank; this handler is the JWT-authenticated face of
 // it for our own UI.
 type InterbankOtcHTTPHandler struct {
-	cfg      *config.Config
-	registry *interbank.Registry
-	client   *interbank.Client
-	negRepo  *repository.InterbankOtcRepository
+	cfg         *config.Config
+	registry    *interbank.Registry
+	client      *interbank.Client
+	negRepo     *repository.InterbankOtcRepository
+	negsHandler *interbank.NegotiationsHandler
 }
 
 func NewInterbankOtcHTTPHandler(
@@ -38,12 +39,14 @@ func NewInterbankOtcHTTPHandler(
 	registry *interbank.Registry,
 	client *interbank.Client,
 	negRepo *repository.InterbankOtcRepository,
+	negsHandler *interbank.NegotiationsHandler,
 ) *InterbankOtcHTTPHandler {
 	return &InterbankOtcHTTPHandler{
-		cfg:      cfg,
-		registry: registry,
-		client:   client,
-		negRepo:  negRepo,
+		cfg:         cfg,
+		registry:    registry,
+		client:      client,
+		negRepo:     negRepo,
+		negsHandler: negsHandler,
 	}
 }
 
@@ -88,6 +91,17 @@ func (h *InterbankOtcHTTPHandler) Routes(w http.ResponseWriter, r *http.Request)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	case len(parts) == 4 && parts[0] == "negotiations" && parts[3] == "accept":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		routing, id, ok := parseRoutingAndID(parts[1], parts[2])
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "expected /negotiations/{routingNumber}/{id}/accept"})
+			return
+		}
+		h.acceptNegotiation(w, r, routing, id)
 	default:
 		http.NotFound(w, r)
 	}
@@ -540,6 +554,57 @@ func (h *InterbankOtcHTTPHandler) closeNegotiation(w http.ResponseWriter, r *htt
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// acceptNegotiation is the local-seller analogue of the partner-triggered
+// GET /negotiations/{r}/{id}/accept in package interbank. It validates
+// that the caller's local id matches the seller on the negotiation,
+// then asks NegotiationsHandler to run the same dispatch (close
+// locally, send NEW_TX, follow with COMMIT_TX on YES). The HTTP
+// response carries the buyer-bank's vote on success or a structured
+// error on dispatch / commit failure.
+func (h *InterbankOtcHTTPHandler) acceptNegotiation(w http.ResponseWriter, r *http.Request, routing interbank.RoutingNumber, id string) {
+	claims, ok := requireAuthenticatedHTTP(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireTradingAccessHTTP(w, claims) {
+		return
+	}
+	localID, ok := localParticipantIDFromClaims(claims)
+	if !ok {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "only client tokens can accept interbank negotiations"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	outcome, statusCode, errMsg := h.negsHandler.AcceptForLocalSeller(ctx, routing, id, localID)
+	if statusCode != 0 {
+		writeJSON(w, statusCode, map[string]string{"message": errMsg})
+		return
+	}
+
+	switch {
+	case outcome.DispatchErr != nil:
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"message": fmt.Sprintf("dispatching NEW_TX to buyer's bank failed: %v", outcome.DispatchErr),
+		})
+	case outcome.Vote != nil && outcome.Vote.Vote != interbank.VoteYes:
+		writeJSON(w, http.StatusConflict, map[string]interface{}{
+			"message": "buyer's bank refused the acceptance — negotiation has been reopened",
+			"vote":    outcome.Vote,
+		})
+	case outcome.CommitErr != nil:
+		writeJSON(w, http.StatusBadGateway, map[string]interface{}{
+			"message": fmt.Sprintf("buyer voted YES but COMMIT_TX failed; operator action required: %v", outcome.CommitErr),
+			"vote":    outcome.Vote,
+		})
+	default:
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"vote": outcome.Vote,
+		})
+	}
 }
 
 func negotiationRowToResponse(row *models.InterbankOtcNegotiation) map[string]interface{} {
