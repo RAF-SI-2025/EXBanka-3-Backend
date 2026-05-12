@@ -2,9 +2,13 @@ package interbank
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
+	"time"
+
+	"gorm.io/gorm"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/repository"
@@ -17,30 +21,36 @@ import (
 // PERSON accounts and MONAS+OPTION assets). Any other shape gets
 // VoteNo with an appropriate reason.
 //
-// Scope note: cash reservation against our local user's balance is
-// NOT yet enforced — that requires calling bank-service across the
-// service boundary, which is a follow-up. Until then we persist the
-// reservation snapshot in InterbankPendingTx so it can be honoured
-// retroactively once the bank-service shim lands.
+// The processor owns a *gorm.DB so it can wrap each phase (vote +
+// reservation; commit + debit + contract creation + negotiation close;
+// rollback + release) in a single atomic transaction. If anything in
+// that bundle fails the whole bundle rolls back and the protocol's
+// retry / CHECK_STATUS path will reconverge the two banks.
 type OtcTxProcessor struct {
+	db           *gorm.DB
 	registry     *Registry
 	negRepo      *repository.InterbankOtcRepository
 	pendingRepo  *repository.InterbankPendingTxRepository
 	contractRepo *repository.InterbankOptionContractRepository
+	walletRepo   *repository.InterbankWalletRepository
 }
 
 // NewOtcTxProcessor wires up the real TxProcessor implementation.
 func NewOtcTxProcessor(
+	db *gorm.DB,
 	registry *Registry,
 	negRepo *repository.InterbankOtcRepository,
 	pendingRepo *repository.InterbankPendingTxRepository,
 	contractRepo *repository.InterbankOptionContractRepository,
+	walletRepo *repository.InterbankWalletRepository,
 ) *OtcTxProcessor {
 	return &OtcTxProcessor{
+		db:           db,
 		registry:     registry,
 		negRepo:      negRepo,
 		pendingRepo:  pendingRepo,
 		contractRepo: contractRepo,
+		walletRepo:   walletRepo,
 	}
 }
 
@@ -108,10 +118,10 @@ func (p *OtcTxProcessor) OnNewTx(_ context.Context, partner *PartnerBank, tx *Tr
 		return voteNo(NoVoteReason{Reason: ReasonOptionUsedOrExpired, Posting: parsed.optionLegBuyerPosting}), nil
 	}
 
-	// Persist the pending row so COMMIT_TX/ROLLBACK_TX can find back
-	// what we promised. If an identical row already exists (NEW_TX
-	// replay sneaking past the idempotence layer) treat as a no-op
-	// success.
+	// If we've already voted YES on this TransactionID (NEW_TX replay
+	// past the inbound idempotence layer) the pending row is already
+	// here and the reservation already taken — return YES without
+	// re-reserving.
 	existing, err := p.pendingRepo.GetByTxID(
 		int(tx.TransactionID.RoutingNumber),
 		tx.TransactionID.ID,
@@ -119,41 +129,70 @@ func (p *OtcTxProcessor) OnNewTx(_ context.Context, partner *PartnerBank, tx *Tr
 	if err != nil {
 		return nil, fmt.Errorf("looking up pending tx: %w", err)
 	}
-	if existing == nil {
-		row := &models.InterbankPendingTx{
-			TxRoutingNumber:          int(tx.TransactionID.RoutingNumber),
-			TxID:                     tx.TransactionID.ID,
-			PartnerRoutingNumber:     int(partner.Code),
-			NegotiationRoutingNumber: neg.NegotiationRoutingNumber,
-			NegotiationID:            neg.NegotiationID,
-
-			ReservedFromLocalID: neg.BuyerID,
-			ReservedCurrency:    neg.PremiumCurrency,
-			ReservedAmount:      neg.PremiumAmount,
-
-			StockTicker:          neg.StockTicker,
-			OptionAmount:         neg.Amount,
-			PricePerUnitCurrency: neg.PricePerUnitCurrency,
-			PricePerUnitAmount:   neg.PricePerUnitAmount,
-			SettlementDate:       neg.SettlementDate,
-
-			BuyerRoutingNumber:  neg.BuyerRoutingNumber,
-			BuyerID:             neg.BuyerID,
-			SellerRoutingNumber: neg.SellerRoutingNumber,
-			SellerID:            neg.SellerID,
-
-			Status: models.InterbankPendingTxStatusPending,
-		}
-		if err := p.pendingRepo.Create(row); err != nil {
-			return nil, fmt.Errorf("persisting pending tx: %w", err)
-		}
+	if existing != nil {
+		return &TransactionVote{Vote: VoteYes}, nil
 	}
 
-	// TODO(interbank-balance): once bank-service exposes a "reserve"
-	// shim, call it here for ReservedAmount of ReservedCurrency on
-	// the local buyer; on failure return ReasonInsufficientAsset. For
-	// now we record the intent and trust the partner.
-	slog.Info("interbank: OTC option NEW_TX accepted (cash reservation deferred)",
+	// First time we've seen this TransactionID. Reserve the buyer's
+	// premium AND persist the pending row in a single DB transaction
+	// so a crash between the two can't leak a reservation that has no
+	// record (and conversely, can't promise a commit we haven't
+	// actually backed with funds).
+	row := &models.InterbankPendingTx{
+		TxRoutingNumber:          int(tx.TransactionID.RoutingNumber),
+		TxID:                     tx.TransactionID.ID,
+		PartnerRoutingNumber:     int(partner.Code),
+		NegotiationRoutingNumber: neg.NegotiationRoutingNumber,
+		NegotiationID:            neg.NegotiationID,
+
+		ReservedFromLocalID: neg.BuyerID,
+		ReservedCurrency:    neg.PremiumCurrency,
+		ReservedAmount:      neg.PremiumAmount,
+
+		StockTicker:          neg.StockTicker,
+		OptionAmount:         neg.Amount,
+		PricePerUnitCurrency: neg.PricePerUnitCurrency,
+		PricePerUnitAmount:   neg.PricePerUnitAmount,
+		SettlementDate:       neg.SettlementDate,
+
+		BuyerRoutingNumber:  neg.BuyerRoutingNumber,
+		BuyerID:             neg.BuyerID,
+		SellerRoutingNumber: neg.SellerRoutingNumber,
+		SellerID:            neg.SellerID,
+
+		Status:    models.InterbankPendingTxStatusPending,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	var reservationFailed bool
+	txErr := p.db.Transaction(func(dbtx *gorm.DB) error {
+		if err := p.walletRepo.Reserve(dbtx, neg.BuyerID, neg.PremiumCurrency, neg.PremiumAmount); err != nil {
+			if errors.Is(err, repository.ErrInterbankWalletInsufficient) {
+				reservationFailed = true
+				return err
+			}
+			return err
+		}
+		return dbtx.Create(row).Error
+	})
+	if reservationFailed {
+		slog.Info("interbank: OTC option NEW_TX refused (insufficient buyer funds)",
+			"tx_routing", tx.TransactionID.RoutingNumber,
+			"tx_id", tx.TransactionID.ID,
+			"buyer_local_id", neg.BuyerID,
+			"premium_currency", neg.PremiumCurrency,
+			"premium_amount", neg.PremiumAmount,
+		)
+		return voteNo(NoVoteReason{
+			Reason:  ReasonInsufficientAsset,
+			Posting: parsed.cashLegBuyerPosting,
+		}), nil
+	}
+	if txErr != nil {
+		return nil, fmt.Errorf("reserving buyer wallet + persisting pending tx: %w", txErr)
+	}
+
+	slog.Info("interbank: OTC option NEW_TX accepted, buyer premium reserved",
 		"tx_routing", tx.TransactionID.RoutingNumber,
 		"tx_id", tx.TransactionID.ID,
 		"buyer_local_id", neg.BuyerID,
@@ -164,10 +203,13 @@ func (p *OtcTxProcessor) OnNewTx(_ context.Context, partner *PartnerBank, tx *Tr
 	return &TransactionVote{Vote: VoteYes}, nil
 }
 
-// OnCommitTx implements TxProcessor.OnCommitTx. On the first commit for
-// a given TransactionID we create the local option-contract row and
-// flip the negotiation closed; subsequent invocations are no-ops by
-// design (the protocol mandates byte-identical replay).
+// OnCommitTx implements TxProcessor.OnCommitTx. Wraps the four effects
+// (flip pending → committed, debit the reserved premium from stanje,
+// materialise the option-contract row, close the negotiation) in a
+// single DB transaction so a mid-flow crash leaves the pending row in
+// the "pending" state — the partner's CHECK_STATUS / retry path then
+// re-runs the whole bundle. Subsequent legitimate replays (status
+// already committed) are no-ops.
 func (p *OtcTxProcessor) OnCommitTx(_ context.Context, _ *PartnerBank, txID ForeignBankId) error {
 	pending, err := p.pendingRepo.GetByTxID(int(txID.RoutingNumber), txID.ID)
 	if err != nil {
@@ -192,56 +234,102 @@ func (p *OtcTxProcessor) OnCommitTx(_ context.Context, _ *PartnerBank, txID Fore
 			txID.RoutingNumber, txID.ID, pending.Status)
 	}
 
-	// Create the local option-contract row (idempotent on the
-	// negotiation key — if a row already exists, skip).
-	existingContract, err := p.contractRepo.Get(pending.NegotiationRoutingNumber, pending.NegotiationID)
+	now := time.Now().UTC()
+	err = p.db.Transaction(func(dbtx *gorm.DB) error {
+		// CAS the pending row first so concurrent COMMIT_TX retries
+		// (which can happen if the inbound idempotence layer is
+		// bypassed by a fresh envelope key) serialise on this UPDATE.
+		// RowsAffected == 0 means somebody else already committed —
+		// nothing to do.
+		res := dbtx.Model(&models.InterbankPendingTx{}).
+			Where("tx_routing_number = ? AND tx_id = ? AND status = ?",
+				int(txID.RoutingNumber), txID.ID, models.InterbankPendingTxStatusPending).
+			Updates(map[string]interface{}{
+				"status":      models.InterbankPendingTxStatusCommitted,
+				"resolved_at": now,
+			})
+		if res.Error != nil {
+			return fmt.Errorf("marking pending tx committed: %w", res.Error)
+		}
+		if res.RowsAffected == 0 {
+			return errAlreadyResolved
+		}
+
+		// Debit the reserved premium from the buyer's stanje.
+		// raspolozivo_stanje was already decremented during NEW_TX.
+		if err := p.walletRepo.Debit(dbtx, pending.ReservedFromLocalID, pending.ReservedCurrency, pending.ReservedAmount); err != nil {
+			return fmt.Errorf("debiting buyer wallet on commit: %w", err)
+		}
+
+		// Create the local option-contract row idempotently — replays
+		// inside the same tx are blocked by the CAS above, but the
+		// row may already exist from a partially-applied earlier
+		// attempt (status was reset out-of-band).
+		var existing models.InterbankOptionContract
+		err := dbtx.
+			Where("negotiation_routing_number = ? AND negotiation_id = ?",
+				pending.NegotiationRoutingNumber, pending.NegotiationID).
+			First(&existing).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("loading option contract: %w", err)
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			contract := &models.InterbankOptionContract{
+				NegotiationRoutingNumber: pending.NegotiationRoutingNumber,
+				NegotiationID:            pending.NegotiationID,
+				BuyerLocalID:             pending.BuyerID,
+				SellerRoutingNumber:      pending.SellerRoutingNumber,
+				SellerID:                 pending.SellerID,
+				StockTicker:              pending.StockTicker,
+				Amount:                   pending.OptionAmount,
+				PricePerUnitCurrency:     pending.PricePerUnitCurrency,
+				PricePerUnitAmount:       pending.PricePerUnitAmount,
+				PremiumCurrency:          pending.ReservedCurrency,
+				PremiumAmount:            pending.ReservedAmount,
+				SettlementDate:           pending.SettlementDate,
+				Status:                   models.InterbankOptionContractStatusValid,
+				CreatedAt:                now,
+				UpdatedAt:                now,
+			}
+			if err := dbtx.Create(contract).Error; err != nil {
+				return fmt.Errorf("creating option contract: %w", err)
+			}
+		}
+
+		// Close the negotiation.
+		if err := dbtx.Model(&models.InterbankOtcNegotiation{}).
+			Where("negotiation_routing_number = ? AND negotiation_id = ?",
+				pending.NegotiationRoutingNumber, pending.NegotiationID).
+			Updates(map[string]interface{}{
+				"is_ongoing": false,
+				"updated_at": now,
+			}).Error; err != nil {
+			return fmt.Errorf("closing negotiation on commit: %w", err)
+		}
+
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("loading option contract: %w", err)
-	}
-	if existingContract == nil {
-		contract := &models.InterbankOptionContract{
-			NegotiationRoutingNumber: pending.NegotiationRoutingNumber,
-			NegotiationID:            pending.NegotiationID,
-			BuyerLocalID:             pending.BuyerID,
-			SellerRoutingNumber:      pending.SellerRoutingNumber,
-			SellerID:                 pending.SellerID,
-			StockTicker:              pending.StockTicker,
-			Amount:                   pending.OptionAmount,
-			PricePerUnitCurrency:     pending.PricePerUnitCurrency,
-			PricePerUnitAmount:       pending.PricePerUnitAmount,
-			PremiumCurrency:          pending.ReservedCurrency,
-			PremiumAmount:            pending.ReservedAmount,
-			SettlementDate:           pending.SettlementDate,
-			Status:                   models.InterbankOptionContractStatusValid,
+		if errors.Is(err, errAlreadyResolved) {
+			return nil
 		}
-		if err := p.contractRepo.Create(contract); err != nil {
-			return fmt.Errorf("creating option contract: %w", err)
-		}
-	}
-
-	if err := p.negRepo.MarkClosed(pending.NegotiationRoutingNumber, pending.NegotiationID); err != nil {
-		return fmt.Errorf("closing negotiation on commit: %w", err)
-	}
-
-	// TODO(interbank-balance): on commit we owe the bank-service shim
-	// a "deduct reserved" call so the premium actually leaves the
-	// buyer's wallet. Today we just mark the pending row committed.
-	if err := p.pendingRepo.MarkCommitted(int(txID.RoutingNumber), txID.ID); err != nil {
-		return fmt.Errorf("marking pending tx committed: %w", err)
+		return err
 	}
 
 	slog.Info("interbank: OTC option COMMIT_TX applied",
 		"tx_routing", txID.RoutingNumber,
 		"tx_id", txID.ID,
 		"negotiation_id", pending.NegotiationID,
+		"debited_currency", pending.ReservedCurrency,
+		"debited_amount", pending.ReservedAmount,
 	)
 	return nil
 }
 
-// OnRollbackTx implements TxProcessor.OnRollbackTx. Releases the
-// reservation snapshot (logged TODO until bank-service is wired) and
-// flips the pending row to rolled_back. Idempotent: replays after the
-// first rollback are no-ops.
+// OnRollbackTx implements TxProcessor.OnRollbackTx. Wraps the pending
+// row flip and the reservation release in a single DB transaction so
+// the two effects land together or not at all. Idempotent: replays
+// after the first rollback are no-ops.
 func (p *OtcTxProcessor) OnRollbackTx(_ context.Context, _ *PartnerBank, txID ForeignBankId) error {
 	pending, err := p.pendingRepo.GetByTxID(int(txID.RoutingNumber), txID.ID)
 	if err != nil {
@@ -267,18 +355,53 @@ func (p *OtcTxProcessor) OnRollbackTx(_ context.Context, _ *PartnerBank, txID Fo
 			txID.RoutingNumber, txID.ID, pending.Status)
 	}
 
-	// TODO(interbank-balance): release the reservation in bank-service.
-	if err := p.pendingRepo.MarkRolledBack(int(txID.RoutingNumber), txID.ID); err != nil {
-		return fmt.Errorf("marking pending tx rolled back: %w", err)
+	now := time.Now().UTC()
+	err = p.db.Transaction(func(dbtx *gorm.DB) error {
+		res := dbtx.Model(&models.InterbankPendingTx{}).
+			Where("tx_routing_number = ? AND tx_id = ? AND status = ?",
+				int(txID.RoutingNumber), txID.ID, models.InterbankPendingTxStatusPending).
+			Updates(map[string]interface{}{
+				"status":      models.InterbankPendingTxStatusRolledBack,
+				"resolved_at": now,
+			})
+		if res.Error != nil {
+			return fmt.Errorf("marking pending tx rolled back: %w", res.Error)
+		}
+		if res.RowsAffected == 0 {
+			return errAlreadyResolved
+		}
+
+		// Refund the buyer's premium reservation. We always release
+		// even if Reserve would have skipped a "bank-" buyer — that
+		// case can't actually occur because OnNewTx would have voted
+		// NO without creating a pending row.
+		if err := p.walletRepo.Release(dbtx, pending.ReservedFromLocalID, pending.ReservedCurrency, pending.ReservedAmount); err != nil {
+			return fmt.Errorf("releasing buyer wallet reservation: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, errAlreadyResolved) {
+			return nil
+		}
+		return err
 	}
 
 	slog.Info("interbank: OTC option ROLLBACK_TX applied",
 		"tx_routing", txID.RoutingNumber,
 		"tx_id", txID.ID,
 		"negotiation_id", pending.NegotiationID,
+		"released_currency", pending.ReservedCurrency,
+		"released_amount", pending.ReservedAmount,
 	)
 	return nil
 }
+
+// errAlreadyResolved is an internal sentinel used inside the OnCommitTx
+// / OnRollbackTx transactions to signal that the pending row was
+// flipped by a concurrent caller. Treated as success at the outer
+// boundary so the protocol response is idempotent.
+var errAlreadyResolved = errors.New("interbank: pending tx already resolved by concurrent caller")
 
 // otcAcceptanceTx is a parsed view of a 4-posting OTC option acceptance
 // NEW_TX. The four postings are: cash buyer (-P), cash seller (+P),
