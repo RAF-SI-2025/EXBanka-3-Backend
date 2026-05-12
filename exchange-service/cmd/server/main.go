@@ -90,7 +90,7 @@ func main() {
 	ibTxProcessor := interbank.NewOtcTxProcessor(db, ibRegistry, ibNegRepo, ibPendingRepo, ibOptionContractRepo, ibWalletRepo)
 	ibServer := interbank.NewServer(ibRegistry, ibInboundRepo, ibTxProcessor)
 	ibOtcH := interbank.NewOTCHandler(ibRegistry, portfolioRepo, interbank.StubDisplayNameResolver{})
-	ibNegH := interbank.NewNegotiationsHandler(ibRegistry, ibNegRepo, ibClient)
+	ibNegH := interbank.NewNegotiationsHandler(ibRegistry, ibNegRepo, ibClient, db, ibWalletRepo)
 
 	cronScheduler := service.StartCronJobs(db, portfolioSvc, rateProvider, sagaRetryRunner, fundSvc)
 

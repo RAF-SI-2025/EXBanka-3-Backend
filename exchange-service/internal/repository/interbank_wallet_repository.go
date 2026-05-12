@@ -40,7 +40,7 @@ func NewInterbankWalletRepository(db *gorm.DB) *InterbankWalletRepository {
 // Returns ErrInterbankWalletInsufficient if no eligible account exists
 // or the available balance is too low.
 func (r *InterbankWalletRepository) Reserve(tx *gorm.DB, localID, currency string, amount float64) error {
-	accountID, err := r.lockBuyerAccount(tx, localID, currency)
+	accountID, err := r.lockClientAccount(tx, localID, currency)
 	if err != nil {
 		return err
 	}
@@ -63,7 +63,7 @@ func (r *InterbankWalletRepository) Reserve(tx *gorm.DB, localID, currency strin
 // there, so we only touch stanje here. The same row-lock is taken so
 // the read-modify-write is serialised against any concurrent activity.
 func (r *InterbankWalletRepository) Debit(tx *gorm.DB, localID, currency string, amount float64) error {
-	accountID, err := r.lockBuyerAccount(tx, localID, currency)
+	accountID, err := r.lockClientAccount(tx, localID, currency)
 	if err != nil {
 		return err
 	}
@@ -82,7 +82,7 @@ func (r *InterbankWalletRepository) Debit(tx *gorm.DB, localID, currency string,
 // back to where it was before the NEW_TX. stanje is unchanged because
 // Debit hasn't run yet on a rolled-back transaction.
 func (r *InterbankWalletRepository) Release(tx *gorm.DB, localID, currency string, amount float64) error {
-	accountID, err := r.lockBuyerAccount(tx, localID, currency)
+	accountID, err := r.lockClientAccount(tx, localID, currency)
 	if err != nil {
 		return err
 	}
@@ -97,12 +97,38 @@ func (r *InterbankWalletRepository) Release(tx *gorm.DB, localID, currency strin
 	return nil
 }
 
-// lockBuyerAccount finds and SELECT-FOR-UPDATE-locks the buyer's first
-// active account in the given currency. Returns the account id or
-// ErrInterbankWalletInsufficient if there's no match. Deterministic
-// ordering by id keeps repeated calls on the same (client, currency)
-// converging on the same row.
-func (r *InterbankWalletRepository) lockBuyerAccount(tx *gorm.DB, localID, currency string) (uint, error) {
+// Credit pays the local seller for an inter-bank OTC option acceptance
+// once the buyer's bank has voted YES and we have successfully sent
+// COMMIT_TX. Both stanje and raspolozivo_stanje go up by amount so the
+// seller can both see and spend the funds immediately. Reuses the same
+// "first active account in this currency" lookup as Reserve/Debit/
+// Release; ErrInterbankWalletInsufficient maps to "no eligible account"
+// (the caller treats it as an operator-action failure since the
+// partner has already committed).
+func (r *InterbankWalletRepository) Credit(tx *gorm.DB, localID, currency string, amount float64) error {
+	accountID, err := r.lockClientAccount(tx, localID, currency)
+	if err != nil {
+		return err
+	}
+	res := tx.Table("accounts").
+		Where("id = ?", accountID).
+		Updates(map[string]interface{}{
+			"stanje":             gorm.Expr("stanje + ?", amount),
+			"raspolozivo_stanje": gorm.Expr("raspolozivo_stanje + ?", amount),
+		})
+	if res.Error != nil {
+		return fmt.Errorf("crediting seller wallet: %w", res.Error)
+	}
+	return nil
+}
+
+// lockClientAccount finds and SELECT-FOR-UPDATE-locks the client's
+// first active account in the given currency — used for both buyer
+// debits (Reserve/Debit/Release) and seller credits (Credit). Returns
+// the account id or ErrInterbankWalletInsufficient if there's no
+// match. Deterministic ordering by id keeps repeated calls on the
+// same (client, currency) converging on the same row.
+func (r *InterbankWalletRepository) lockClientAccount(tx *gorm.DB, localID, currency string) (uint, error) {
 	clientID, err := parseClientLocalID(localID)
 	if err != nil {
 		return 0, err

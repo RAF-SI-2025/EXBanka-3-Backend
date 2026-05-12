@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/repository"
@@ -24,17 +25,31 @@ import (
 // negotiations_accept.go because it owns the outbound NEW_TX dispatch
 // that the other verbs don't need.
 type NegotiationsHandler struct {
-	registry *Registry
-	repo     *repository.InterbankOtcRepository
-	client   *Client
+	registry   *Registry
+	repo       *repository.InterbankOtcRepository
+	client     *Client
+	db         *gorm.DB
+	walletRepo *repository.InterbankWalletRepository
 }
 
-// NewNegotiationsHandler wires up the negotiation routes.
-func NewNegotiationsHandler(registry *Registry, repo *repository.InterbankOtcRepository, client *Client) *NegotiationsHandler {
+// NewNegotiationsHandler wires up the negotiation routes. db and
+// walletRepo are used by runAcceptDispatch to credit the local
+// seller's wallet after a successful COMMIT_TX — they're left
+// nil-safe-checked in the dispatch path so older test setups that
+// don't need a real wallet can still construct the handler.
+func NewNegotiationsHandler(
+	registry *Registry,
+	repo *repository.InterbankOtcRepository,
+	client *Client,
+	db *gorm.DB,
+	walletRepo *repository.InterbankWalletRepository,
+) *NegotiationsHandler {
 	return &NegotiationsHandler{
-		registry: registry,
-		repo:     repo,
-		client:   client,
+		registry:   registry,
+		repo:       repo,
+		client:     client,
+		db:         db,
+		walletRepo: walletRepo,
 	}
 }
 

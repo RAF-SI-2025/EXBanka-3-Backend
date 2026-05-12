@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
 )
@@ -175,7 +176,38 @@ func (h *NegotiationsHandler) runAcceptDispatch(ctx context.Context, neg *models
 		return AcceptOutcome{Vote: vote, CommitErr: err}
 	}
 
+	// COMMIT_TX succeeded — the partner has moved the premium out
+	// of the buyer's wallet. Mirror it locally by crediting our
+	// seller's wallet so the books match the protocol state. A
+	// failure here is reported via CommitErr (same operator-action
+	// signal as a COMMIT_TX failure) because the negotiation is
+	// already closed and the partner has already committed.
+	if err := h.creditLocalSeller(neg); err != nil {
+		slog.Error("interbank: seller wallet credit failed after COMMIT_TX",
+			"err", err, "negotiation", neg.NegotiationID, "transaction", tx.TransactionID.ID,
+			"seller", neg.SellerID, "currency", neg.PremiumCurrency, "amount", neg.PremiumAmount)
+		return AcceptOutcome{Vote: vote, CommitErr: fmt.Errorf("local seller credit failed after commit: %w", err)}
+	}
+
 	return AcceptOutcome{Vote: vote}
+}
+
+// creditLocalSeller credits the seller's wallet by the premium
+// amount in a single DB transaction. The negotiation row was
+// already moved to closed before dispatch, so there's no other
+// local state to bundle.
+//
+// When db or walletRepo are nil (older test wiring), the credit is
+// skipped silently — the protocol state is correct on the wire even
+// without the local-books update, and the production path always
+// supplies both deps via NewNegotiationsHandler in main.go.
+func (h *NegotiationsHandler) creditLocalSeller(neg *models.InterbankOtcNegotiation) error {
+	if h.db == nil || h.walletRepo == nil {
+		return nil
+	}
+	return h.db.Transaction(func(tx *gorm.DB) error {
+		return h.walletRepo.Credit(tx, neg.SellerID, neg.PremiumCurrency, neg.PremiumAmount)
+	})
 }
 
 // buildOptionAcceptanceTx builds the protocol Transaction that
