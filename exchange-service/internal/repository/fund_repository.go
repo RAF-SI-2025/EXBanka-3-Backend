@@ -30,12 +30,26 @@ type FundAccountRef struct {
 	CurrencyID        uint    `gorm:"column:currency_id"`
 	CurrencyCode      string  `gorm:"column:currency_kod"`
 	Status            string  `gorm:"column:status"`
+	Podvrsta          string  `gorm:"column:podvrsta"`
+	FirmaIsState      bool    `gorm:"column:firma_is_state"`
 	Stanje            float64 `gorm:"column:stanje"`
 	RaspolozivoStanje float64 `gorm:"column:raspolozivo_stanje"`
 }
 
+// IsFundAccount reports whether the account is an investment fund's own RSD
+// account (`podvrsta='fondacija'`). Such accounts have no firma and are NOT
+// bank-owned by the new definition; this helper exists for the defence-in-depth
+// guard in fund_service.go.
+func (a FundAccountRef) IsFundAccount() bool {
+	return a.Podvrsta == "fondacija"
+}
+
+// IsBankOwned reports whether the account belongs to the bank itself.
+// Convention used across loan-service, transfer-service and order-repository:
+// firma_id is set, no client_id, and the firma is NOT the state firma
+// (Republika Srbija). Fund accounts (no firma_id) are excluded automatically.
 func (a FundAccountRef) IsBankOwned() bool {
-	return a.ClientID == nil && a.FirmaID == nil && a.ZaposleniID == nil
+	return a.ClientID == nil && a.FirmaID != nil && !a.FirmaIsState
 }
 
 func (a FundAccountRef) BelongsToClient(clientID uint) bool {
@@ -369,11 +383,12 @@ func getFundAccountRef(db *gorm.DB, accountID uint, lock bool) (*FundAccountRef,
 		return nil, nil
 	}
 	q := db.Table("accounts").
-		Select("accounts.id, accounts.broj_racuna, accounts.client_id, accounts.firma_id, accounts.zaposleni_id, accounts.currency_id, currencies.kod AS currency_kod, accounts.status, accounts.stanje, accounts.raspolozivo_stanje").
+		Select("accounts.id, accounts.broj_racuna, accounts.client_id, accounts.firma_id, accounts.zaposleni_id, accounts.currency_id, currencies.kod AS currency_kod, accounts.status, accounts.podvrsta, COALESCE(firmas.is_state, false) AS firma_is_state, accounts.stanje, accounts.raspolozivo_stanje").
 		Joins("LEFT JOIN currencies ON currencies.id = accounts.currency_id").
+		Joins("LEFT JOIN firmas ON firmas.id = accounts.firma_id").
 		Where("accounts.id = ?", accountID)
 	if lock {
-		q = q.Clauses(clause.Locking{Strength: "UPDATE"})
+		q = q.Clauses(clause.Locking{Strength: "UPDATE", Table: clause.Table{Name: "accounts"}})
 	}
 	var ref FundAccountRef
 	if err := q.First(&ref).Error; err != nil {

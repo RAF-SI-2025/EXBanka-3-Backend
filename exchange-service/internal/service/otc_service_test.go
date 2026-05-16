@@ -538,8 +538,10 @@ func TestOtcService_ExpireDueContracts(t *testing.T) {
 	}
 }
 
-func TestOtcService_AcceptOfferRejectsBuyer(t *testing.T) {
-	svc, holding, _ := setupOtcServiceFixture(t, "otc_accept_buyer")
+func TestOtcService_AcceptOfferRejectsOwnCounter(t *testing.T) {
+	// Buyer creates the offer (so buyer is the last modifier). They cannot
+	// accept their own pending offer — only the counterparty can.
+	svc, holding, _ := setupOtcServiceFixture(t, "otc_accept_own_counter")
 	offer, err := svc.CreateOffer(service.CreateOtcOfferInput{
 		BuyerID:         100,
 		BuyerType:       "client",
@@ -555,8 +557,47 @@ func TestOtcService_AcceptOfferRejectsBuyer(t *testing.T) {
 	}
 
 	_, err = svc.AcceptOffer(offer.ID, 100, "client")
-	if err == nil || !strings.Contains(err.Error(), "only seller") {
-		t.Fatalf("expected seller-only accept error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "own counter") {
+		t.Fatalf("expected own-counter accept error, got %v", err)
+	}
+}
+
+func TestOtcService_AcceptOfferAllowsBuyerAfterSellerCounter(t *testing.T) {
+	// After the seller counters, the seller is the last modifier; the buyer
+	// (recipient of the counter) must be able to accept.
+	svc, holding, _ := setupOtcServiceFixture(t, "otc_accept_after_counter")
+	offer, err := svc.CreateOffer(service.CreateOtcOfferInput{
+		BuyerID:         100,
+		BuyerType:       "client",
+		BuyerAccountID:  2,
+		SellerHoldingID: holding.ID,
+		Amount:          3,
+		PricePerStock:   105,
+		SettlementDate:  time.Now().UTC().AddDate(0, 1, 0),
+		Premium:         25,
+	})
+	if err != nil {
+		t.Fatalf("CreateOffer: %v", err)
+	}
+
+	if _, err := svc.CounterOffer(service.CounterOtcOfferInput{
+		OfferID:        offer.ID,
+		ModifiedByID:   200,
+		ModifiedByType: "client",
+		Amount:         3,
+		PricePerStock:  110,
+		SettlementDate: time.Now().UTC().AddDate(0, 1, 0),
+		Premium:        30,
+	}); err != nil {
+		t.Fatalf("CounterOffer: %v", err)
+	}
+
+	contract, err := svc.AcceptOffer(offer.ID, 100, "client")
+	if err != nil {
+		t.Fatalf("AcceptOffer by buyer after seller counter: %v", err)
+	}
+	if contract.StrikePrice != 110 || contract.Premium != 30 {
+		t.Fatalf("expected counter terms to apply, got %+v", contract)
 	}
 }
 

@@ -471,3 +471,19 @@ func parseSettlement(s string) (time.Time, bool) {
 	}
 	return time.Time{}, false
 }
+
+// sameSettlementDate compares two ISO8601 settlement-date strings by
+// instant rather than byte-equality, so e.g. "2025-04-16T15:32:44+02:00"
+// and "2025-04-16T13:32:44Z" are treated as equal. Falls back to raw
+// string comparison if either side fails to parse.
+func sameSettlementDate(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ta, oka := parseSettlement(a)
+	tb, okb := parseSettlement(b)
+	if !oka || !okb {
+		return false
+	}
+	return ta.Equal(tb)
+}

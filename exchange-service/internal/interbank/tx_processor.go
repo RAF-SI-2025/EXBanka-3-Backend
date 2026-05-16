@@ -538,7 +538,7 @@ func matchAcceptanceTerms(parsed *otcAcceptanceTx, neg *models.InterbankOtcNegot
 		!nearlyEqual(parsed.option.PricePerUnit.Amount, neg.PricePerUnitAmount) {
 		return &NoVoteReason{Reason: ReasonUnacceptableAsset, Posting: parsed.optionLegBuyerPosting}
 	}
-	if parsed.option.SettlementDate != neg.SettlementDate {
+	if !sameSettlementDate(parsed.option.SettlementDate, neg.SettlementDate) {
 		return &NoVoteReason{Reason: ReasonUnacceptableAsset, Posting: parsed.optionLegBuyerPosting}
 	}
 	if !nearlyEqual(parsed.option.Amount, neg.Amount) {
@@ -608,7 +608,7 @@ func sameOption(a, b *OptionDescription) bool {
 		a.Stock.Ticker == b.Stock.Ticker &&
 		a.PricePerUnit.Currency == b.PricePerUnit.Currency &&
 		nearlyEqual(a.PricePerUnit.Amount, b.PricePerUnit.Amount) &&
-		a.SettlementDate == b.SettlementDate &&
+		sameSettlementDate(a.SettlementDate, b.SettlementDate) &&
 		nearlyEqual(a.Amount, b.Amount)
 }
 

@@ -13,6 +13,7 @@ type firmaJSON struct {
 	PIB               string `json:"pib"`
 	Adresa            string `json:"adresa"`
 	SifraDelatnostiID uint   `json:"sifraDelatnostiId"`
+	IsState           bool   `json:"isState"`
 }
 
 type accountHTTPJSON struct {
@@ -55,6 +56,7 @@ func toFirmaJSON(f *models.Firma) *firmaJSON {
 		PIB:               f.PIB,
 		Adresa:            f.Adresa,
 		SifraDelatnostiID: sifraDelatnostiID,
+		IsState:           f.IsState,
 	}
 }
 

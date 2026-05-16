@@ -35,6 +35,25 @@ func (r *OrderRepository) GetOrderByID(id uint) (*models.OrderRecord, error) {
 	return &record, nil
 }
 
+// FindLatestBuyAccountID returns the account_id of the most recent buy order
+// for a given user+asset. Used to backfill legacy portfolio_holdings rows that
+// were created before account_id was tracked. Returns 0 if no prior buy exists.
+func (r *OrderRepository) FindLatestBuyAccountID(userID uint, userType string, assetID uint) (uint, error) {
+	var record models.OrderRecord
+	err := r.db.
+		Where("user_id = ? AND user_type = ? AND asset_id = ? AND direction = ? AND account_id > 0",
+			userID, userType, assetID, "buy").
+		Order("created_at DESC").
+		First(&record).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return record.AccountID, nil
+}
+
 // ListOrdersForUser returns all orders for a given user, optionally filtered by status.
 func (r *OrderRepository) ListOrdersForUser(userID uint, userType, statusFilter string) ([]models.OrderRecord, error) {
 	q := r.db.Preload("Asset").Preload("Asset.Exchange").

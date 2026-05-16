@@ -97,6 +97,7 @@ func (s *PortfolioService) ListHoldingsWithPnL(userID uint, userType string) ([]
 
 	result := make([]HoldingWithPnL, 0, len(holdings))
 	for i := range holdings {
+		s.ensureBuyAccountID(&holdings[i])
 		result = append(result, computePnL(&holdings[i]))
 	}
 	return result, nil
@@ -111,8 +112,25 @@ func (s *PortfolioService) GetHoldingWithPnL(id uint) (*HoldingWithPnL, error) {
 	if h == nil {
 		return nil, fmt.Errorf("holding not found")
 	}
+	s.ensureBuyAccountID(h)
 	pnl := computePnL(h)
 	return &pnl, nil
+}
+
+// ensureBuyAccountID backfills holding.AccountID from the most recent buy order
+// when the column is empty (legacy rows created before account_id was tracked).
+// Persists the backfill so future reads are cheap and the sell flow locks to a
+// real account instead of falling back to the user's first listed account.
+func (s *PortfolioService) ensureBuyAccountID(h *models.PortfolioHoldingRecord) {
+	if h == nil || h.AccountID != 0 || s.orderRepo == nil {
+		return
+	}
+	accountID, err := s.orderRepo.FindLatestBuyAccountID(h.UserID, h.UserType, h.AssetID)
+	if err != nil || accountID == 0 {
+		return
+	}
+	h.AccountID = accountID
+	_ = s.portfolioRepo.SetHoldingAccountID(h.ID, accountID)
 }
 
 // GetHoldingByID returns a single holding by ID.

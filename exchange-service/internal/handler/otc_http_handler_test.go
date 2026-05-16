@@ -764,8 +764,8 @@ func TestOtcHTTP_ListContracts_RequiresTradingPermission(t *testing.T) {
 	}
 }
 
-func TestOtcHTTP_AcceptOffer_RejectsBuyer(t *testing.T) {
-	db := newTestDB(t, "h_otc_accept_buyer")
+func TestOtcHTTP_AcceptOffer_RejectsOwnCounter(t *testing.T) {
+	db := newTestDB(t, "h_otc_accept_own_counter")
 	_, assetID := seedExchangeAndListing(t, db, "ABY")
 
 	holding := models.PortfolioHoldingRecord{
@@ -803,6 +803,6 @@ func TestOtcHTTP_AcceptOffer_RejectsBuyer(t *testing.T) {
 	acceptRec := httptest.NewRecorder()
 	h.OtcRoutes(acceptRec, acceptReq)
 	if acceptRec.Code != http.StatusBadRequest {
-		t.Fatalf("expected buyer accept to fail with 400, got status=%d body=%s", acceptRec.Code, acceptRec.Body.String())
+		t.Fatalf("expected own-counter accept to fail with 400, got status=%d body=%s", acceptRec.Code, acceptRec.Body.String())
 	}
 }

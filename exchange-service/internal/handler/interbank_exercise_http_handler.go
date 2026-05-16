@@ -421,6 +421,7 @@ func upsertBuyerStockHolding(tx *gorm.DB, clientID, assetID, accountID uint, qty
 	return tx.Model(&h).Updates(map[string]interface{}{
 		"quantity":      newQty,
 		"avg_buy_price": newAvg,
+		"account_id":    accountID,
 		"updated_at":    now,
 	}).Error
 }

@@ -181,7 +181,7 @@ func (h *NegotiationsHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, ForeignBankId{
+	writeJSON(w, http.StatusOK, ForeignBankId{
 		RoutingNumber: own,
 		ID:            negID,
 	})

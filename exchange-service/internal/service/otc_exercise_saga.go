@@ -265,6 +265,7 @@ func transferShareOwnership(tx *gorm.DB, sellerHoldingID, buyerID uint, buyerTyp
 	return tx.Model(&buyer).Updates(map[string]interface{}{
 		"quantity":      totalQty,
 		"avg_buy_price": newAvg,
+		"account_id":    buyerAccountID,
 		"updated_at":    now,
 	}).Error
 }
@@ -401,6 +402,6 @@ func lockAccount(tx *gorm.DB, accountID uint, out *repository.OtcAccountReferenc
 		Select("accounts.id, accounts.client_id, accounts.firma_id, accounts.zaposleni_id, currencies.kod AS currency_kod, accounts.stanje, accounts.raspolozivo_stanje, accounts.dnevna_potrosnja, accounts.mesecna_potrosnja, accounts.status").
 		Joins("LEFT JOIN currencies ON currencies.id = accounts.currency_id").
 		Where("accounts.id = ?", accountID).
-		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Clauses(clause.Locking{Strength: "UPDATE", Table: clause.Table{Name: "accounts"}}).
 		First(out).Error
 }

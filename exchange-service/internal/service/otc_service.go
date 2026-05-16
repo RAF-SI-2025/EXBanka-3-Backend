@@ -243,15 +243,29 @@ func (s *OtcService) CancelOffer(offerID uint, buyerID uint, buyerType string) (
 	return s.updateOfferStatusForParticipant(offerID, buyerID, buyerType, models.OtcOfferStatusCancelled)
 }
 
-func (s *OtcService) AcceptOffer(offerID uint, sellerID uint, sellerType string) (*models.OtcContractRecord, error) {
-	if !hasParticipantIdentity(sellerID, sellerType) {
-		return nil, fmt.Errorf("seller identity is required")
+func (s *OtcService) AcceptOffer(offerID uint, userID uint, userType string) (*models.OtcContractRecord, error) {
+	if !hasParticipantIdentity(userID, userType) {
+		return nil, fmt.Errorf("participant identity is required")
 	}
 	if offerID == 0 {
 		return nil, fmt.Errorf("offer id is required")
 	}
 
-	contract, err := s.otcRepo.AcceptOfferAndCreateContract(offerID, sellerID, sellerType)
+	offer, err := s.otcRepo.GetOfferByID(offerID)
+	if err != nil {
+		return nil, err
+	}
+	if offer == nil || !isOfferParticipant(*offer, userID, userType) {
+		return nil, ErrOtcOfferNotFound
+	}
+	if offer.Status != models.OtcOfferStatusPending {
+		return nil, fmt.Errorf("only pending offers can be accepted")
+	}
+	if offer.ModifiedByID == userID && offer.ModifiedByType == userType {
+		return nil, fmt.Errorf("cannot accept your own counter offer")
+	}
+
+	contract, err := s.otcRepo.AcceptOfferAndCreateContract(offerID, userID, userType)
 	if err != nil {
 		if err.Error() == "offer not found" {
 			return nil, ErrOtcOfferNotFound

@@ -247,6 +247,9 @@ func (s *FundService) InvestInFund(input InvestInFundInput) (*models.ClientFundT
 		if !source.IsBankOwned() {
 			return nil, fmt.Errorf("izabrani racun nije bankin racun")
 		}
+		if source.IsFundAccount() {
+			return nil, fmt.Errorf("racun fonda ne moze biti izvor uplate banke")
+		}
 	}
 	if source.RaspolozivoStanje < input.Amount {
 		return nil, fmt.Errorf("nedovoljno sredstava na izvornom racunu")
@@ -324,6 +327,9 @@ func (s *FundService) WithdrawFromFund(input WithdrawFromFundInput) (*WithdrawRe
 	case "bank":
 		if !destination.IsBankOwned() {
 			return nil, fmt.Errorf("destinacioni racun mora biti bankin")
+		}
+		if destination.IsFundAccount() {
+			return nil, fmt.Errorf("racun fonda ne moze biti destinacija isplate banke")
 		}
 	}
 

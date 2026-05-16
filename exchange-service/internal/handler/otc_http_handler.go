@@ -326,8 +326,8 @@ func (h *OtcHTTPHandler) acceptOffer(w http.ResponseWriter, r *http.Request, off
 		return
 	}
 
-	sellerID, sellerType := callerIdentity(claims)
-	contract, err := h.svc.AcceptOffer(offerID, sellerID, sellerType)
+	userID, userType := callerIdentity(claims)
+	contract, err := h.svc.AcceptOffer(offerID, userID, userType)
 	if err != nil {
 		if errors.Is(err, service.ErrOtcOfferNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"message": "offer not found"})

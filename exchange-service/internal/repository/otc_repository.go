@@ -104,7 +104,7 @@ func (r *OtcRepository) UpdateOfferStatus(id uint, status string, modifiedByID u
 	}).Error
 }
 
-func (r *OtcRepository) AcceptOfferAndCreateContract(offerID uint, sellerID uint, sellerType string) (*models.OtcContractRecord, error) {
+func (r *OtcRepository) AcceptOfferAndCreateContract(offerID uint, acceptorID uint, acceptorType string) (*models.OtcContractRecord, error) {
 	var contractID uint
 	if err := r.db.Transaction(func(tx *gorm.DB) error {
 		var offer models.OtcOfferRecord
@@ -117,8 +117,10 @@ func (r *OtcRepository) AcceptOfferAndCreateContract(offerID uint, sellerID uint
 		if offer.Status != models.OtcOfferStatusPending {
 			return fmt.Errorf("only pending offers can be accepted")
 		}
-		if offer.SellerID != sellerID || offer.SellerType != sellerType {
-			return fmt.Errorf("only seller can accept an offer")
+		isBuyer := offer.BuyerID == acceptorID && offer.BuyerType == acceptorType
+		isSeller := offer.SellerID == acceptorID && offer.SellerType == acceptorType
+		if !isBuyer && !isSeller {
+			return fmt.Errorf("only a negotiation participant can accept an offer")
 		}
 
 		var holding models.PortfolioHoldingRecord
@@ -168,8 +170,8 @@ func (r *OtcRepository) AcceptOfferAndCreateContract(offerID uint, sellerID uint
 		if err := tx.Model(&offer).Updates(map[string]interface{}{
 			"status":           models.OtcOfferStatusAccepted,
 			"last_modified":    now,
-			"modified_by_id":   sellerID,
-			"modified_by_type": sellerType,
+			"modified_by_id":   acceptorID,
+			"modified_by_type": acceptorType,
 			"updated_at":       now,
 		}).Error; err != nil {
 			return err
@@ -341,7 +343,7 @@ func (r *OtcRepository) getAccountReference(db *gorm.DB, accountID uint, lock bo
 		Joins("LEFT JOIN currencies ON currencies.id = accounts.currency_id").
 		Where("accounts.id = ?", accountID)
 	if lock {
-		q = q.Clauses(clause.Locking{Strength: "UPDATE"})
+		q = q.Clauses(clause.Locking{Strength: "UPDATE", Table: clause.Table{Name: "accounts"}})
 	}
 
 	var account OtcAccountReference

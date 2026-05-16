@@ -81,6 +81,14 @@ func (r *PortfolioRepository) ListPublicOTCHoldings(excludeUserID uint, excludeU
 	return records, nil
 }
 
+// SetHoldingAccountID backfills the account_id column on a holding. Used to
+// recover legacy rows that were created before the buy-account was tracked.
+func (r *PortfolioRepository) SetHoldingAccountID(id uint, accountID uint) error {
+	return r.db.Model(&models.PortfolioHoldingRecord{}).
+		Where("id = ? AND account_id = 0", id).
+		Update("account_id", accountID).Error
+}
+
 // RecordBuyFill atomically upserts the portfolio holding for a buy fill.
 // Creates a new holding if none exists; otherwise increases quantity and
 // recalculates the weighted average buy price.
@@ -114,9 +122,12 @@ func (r *PortfolioRepository) RecordBuyFill(userID uint, userType string, assetI
 		newQty := h.Quantity + filledQty
 		newAvg := (h.Quantity*h.AvgBuyPrice + filledQty*fillPrice) / newQty
 
+		// Track the account used for the latest buy so the sell flow can lock
+		// the proceeds back to the same account the client purchased with.
 		return tx.Model(&h).Updates(map[string]interface{}{
 			"quantity":      newQty,
 			"avg_buy_price": newAvg,
+			"account_id":    accountID,
 			"updated_at":    now,
 		}).Error
 	})

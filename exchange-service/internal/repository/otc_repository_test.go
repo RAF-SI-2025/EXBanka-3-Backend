@@ -252,15 +252,15 @@ func TestOtcRepository_AcceptOfferRejectsInsufficientPremiumFunds(t *testing.T) 
 	}
 }
 
-func TestOtcRepository_AcceptOfferRejectsWrongSeller(t *testing.T) {
-	repo, offer := seedOtcOfferFixture(t, "accept_wrong_seller")
+func TestOtcRepository_AcceptOfferRejectsNonParticipant(t *testing.T) {
+	repo, offer := seedOtcOfferFixture(t, "accept_non_participant")
 	if err := repo.CreateOffer(offer); err != nil {
 		t.Fatalf("CreateOffer: %v", err)
 	}
 
 	_, err := repo.AcceptOfferAndCreateContract(offer.ID, 999, offer.SellerType)
 	if err == nil {
-		t.Fatal("expected seller validation error")
+		t.Fatal("expected participant validation error")
 	}
 }
 

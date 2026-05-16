@@ -36,6 +36,10 @@ func NewPaymentMobileVerificationHandler(db *gorm.DB, cfg *config.Config) *Payme
 	return &PaymentMobileVerificationHandler{svc: svc, db: db, cfg: cfg}
 }
 
+func NewPaymentMobileVerificationHandlerWithService(svc paymentMobileVerificationService, db *gorm.DB, cfg *config.Config) *PaymentMobileVerificationHandler {
+	return &PaymentMobileVerificationHandler{svc: svc, db: db, cfg: cfg}
+}
+
 type paymentApprovalRequest struct {
 	Mode string `json:"mode"`
 }
