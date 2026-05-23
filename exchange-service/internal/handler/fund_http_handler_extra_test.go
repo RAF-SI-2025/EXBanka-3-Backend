@@ -41,6 +41,15 @@ func newFundTestDB(t *testing.T, name string) *gorm.DB {
 	)`).Error; err != nil {
 		t.Fatalf("accounts: %v", err)
 	}
+	// Fund account ownership checks LEFT JOIN firmas to read is_state, so the
+	// table must exist even when empty (SQLite errors on a missing table).
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS firmas (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		is_state BOOLEAN DEFAULT false,
+		created_at DATETIME, updated_at DATETIME
+	)`).Error; err != nil {
+		t.Fatalf("firmas: %v", err)
+	}
 	return db
 }
 
