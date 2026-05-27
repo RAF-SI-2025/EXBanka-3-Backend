@@ -3,6 +3,7 @@ package service_test
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
+
+var seedAcctSvcAccountSeq atomic.Uint64
 
 func newAcctSvcTestDB(t *testing.T, name string) *gorm.DB {
 	t.Helper()
@@ -63,7 +66,7 @@ func seedAcctSvcAccount(t *testing.T, db *gorm.DB, clientID, currencyID uint, vr
 	t.Helper()
 	cid := clientID
 	acc := &models.Account{
-		BrojRacuna: fmt.Sprintf("AC-%d-%d-%d", clientID, currencyID, time.Now().UnixNano()),
+		BrojRacuna: fmt.Sprintf("AC-%d-%d-%d-%d", clientID, currencyID, time.Now().UnixNano(), seedAcctSvcAccountSeq.Add(1)),
 		ClientID:   &cid, CurrencyID: currencyID, Vrsta: vrsta, Tip: "tekuci",
 		Status: "aktivan",
 	}

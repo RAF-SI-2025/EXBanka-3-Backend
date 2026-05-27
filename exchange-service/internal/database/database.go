@@ -11,6 +11,8 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+const migrationAdvisoryLockID int64 = 2025062701
+
 func Connect(cfg *config.Config) (*gorm.DB, error) {
 	dsn := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s TimeZone=UTC",
@@ -30,37 +32,52 @@ func Connect(cfg *config.Config) (*gorm.DB, error) {
 
 func Migrate(db *gorm.DB) error {
 	slog.Info("Running exchange-service database migrations...")
-	if err := db.AutoMigrate(
-		&models.MarketExchangeRecord{},
-		&models.ExchangeWorkingDayRecord{},
-		&models.MarketListingRecord{},
-		&models.MarketListingDailyPriceInfoRecord{},
-		&models.StockRecord{},
-		&models.ForexPairRecord{},
-		&models.FuturesContractRecord{},
-		&models.OptionRecord{},
-		&models.OrderRecord{},
-		&models.OrderTransactionRecord{},
-		&models.PortfolioHoldingRecord{},
-		&models.OtcOfferRecord{},
-		&models.OtcContractRecord{},
-		&models.TaxRecord{},
-		&models.SagaTransactionRecord{},
-		&models.SagaStepRecord{},
-		&models.InvestmentFundRecord{},
-		&models.ClientFundTransactionRecord{},
-		&models.ClientFundPositionRecord{},
-		&models.FundPerformanceHistoryRecord{},
-		&models.InterbankInboundMessage{},
-		&models.InterbankOtcNegotiation{},
-		&models.InterbankPendingTx{},
-		&models.InterbankOptionContract{},
-		&models.InterbankPayment{},
-		&models.RemotePublicStockSnapshot{},
-		&models.InterbankPendingExercise{},
-	); err != nil {
+	if err := withMigrationLock(db, func(tx *gorm.DB) error {
+		return tx.AutoMigrate(
+			&models.MarketExchangeRecord{},
+			&models.ExchangeWorkingDayRecord{},
+			&models.MarketListingRecord{},
+			&models.MarketListingDailyPriceInfoRecord{},
+			&models.StockRecord{},
+			&models.ForexPairRecord{},
+			&models.FuturesContractRecord{},
+			&models.OptionRecord{},
+			&models.OrderRecord{},
+			&models.OrderTransactionRecord{},
+			&models.PortfolioHoldingRecord{},
+			&models.OtcOfferRecord{},
+			&models.OtcContractRecord{},
+			&models.TaxRecord{},
+			&models.SagaTransactionRecord{},
+			&models.SagaStepRecord{},
+			&models.InvestmentFundRecord{},
+			&models.ClientFundTransactionRecord{},
+			&models.ClientFundPositionRecord{},
+			&models.FundPerformanceHistoryRecord{},
+			&models.InterbankInboundMessage{},
+			&models.InterbankOtcNegotiation{},
+			&models.InterbankPendingTx{},
+			&models.InterbankOptionContract{},
+			&models.InterbankPayment{},
+			&models.RemotePublicStockSnapshot{},
+			&models.InterbankPendingExercise{},
+		)
+	}); err != nil {
 		return fmt.Errorf("migration failed: %w", err)
 	}
 	slog.Info("Exchange-service migrations complete")
 	return nil
+}
+
+func withMigrationLock(db *gorm.DB, migrate func(*gorm.DB) error) error {
+	if db.Dialector.Name() != "postgres" {
+		return migrate(db)
+	}
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", migrationAdvisoryLockID).Error; err != nil {
+			return fmt.Errorf("failed to acquire migration advisory lock: %w", err)
+		}
+		return migrate(tx)
+	})
 }

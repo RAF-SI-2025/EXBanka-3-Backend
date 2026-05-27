@@ -11,6 +11,8 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+const migrationAdvisoryLockID int64 = 2025062701
+
 func Connect(cfg *config.Config) (*gorm.DB, error) {
 	dsn := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s TimeZone=UTC",
@@ -30,21 +32,39 @@ func Connect(cfg *config.Config) (*gorm.DB, error) {
 
 func Migrate(db *gorm.DB) error {
 	slog.Info("Running client-service database migrations...")
-	if err := db.AutoMigrate(
-		&models.Client{},
-		&models.Permission{},
-	); err != nil {
-		return fmt.Errorf("migration failed: %w", err)
-	}
+	if err := withMigrationLock(db, func(tx *gorm.DB) error {
+		if err := tx.AutoMigrate(
+			&models.Client{},
+			&models.Permission{},
+		); err != nil {
+			return err
+		}
 
-	if err := db.Model(&models.Client{}).
-		Where("password <> ? AND salt_password <> ?", "pending", "pending").
-		Update("aktivan", true).Error; err != nil {
-		return fmt.Errorf("failed to backfill active clients: %w", err)
+		if err := tx.Model(&models.Client{}).
+			Where("password <> ? AND salt_password <> ?", "pending", "pending").
+			Update("aktivan", true).Error; err != nil {
+			return fmt.Errorf("failed to backfill active clients: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
 	}
 
 	slog.Info("Client-service migrations complete")
 	return nil
+}
+
+func withMigrationLock(db *gorm.DB, migrate func(*gorm.DB) error) error {
+	if db.Dialector.Name() != "postgres" {
+		return migrate(db)
+	}
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", migrationAdvisoryLockID).Error; err != nil {
+			return fmt.Errorf("failed to acquire migration advisory lock: %w", err)
+		}
+		return migrate(tx)
+	})
 }
 
 func SeedPermissions(db *gorm.DB) error {

@@ -11,6 +11,8 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+const migrationAdvisoryLockID int64 = 2025062701
+
 func Connect(cfg *config.Config) (*gorm.DB, error) {
 	dsn := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s TimeZone=UTC",
@@ -30,18 +32,33 @@ func Connect(cfg *config.Config) (*gorm.DB, error) {
 
 func Migrate(db *gorm.DB) error {
 	slog.Info("Running account-service database migrations...")
-	if err := db.AutoMigrate(
-		&models.Currency{},
-		&models.SifraDelatnosti{},
-		&models.Firma{},
-		&models.Client{},
-		&models.Account{},
-		&models.Card{},
-		&models.OvlascenoLice{},
-		&models.CardRequest{},
-	); err != nil {
+	if err := withMigrationLock(db, func(tx *gorm.DB) error {
+		return tx.AutoMigrate(
+			&models.Currency{},
+			&models.SifraDelatnosti{},
+			&models.Firma{},
+			&models.Client{},
+			&models.Account{},
+			&models.Card{},
+			&models.OvlascenoLice{},
+			&models.CardRequest{},
+		)
+	}); err != nil {
 		return fmt.Errorf("migration failed: %w", err)
 	}
 	slog.Info("Account-service migrations complete")
 	return nil
+}
+
+func withMigrationLock(db *gorm.DB, migrate func(*gorm.DB) error) error {
+	if db.Dialector.Name() != "postgres" {
+		return migrate(db)
+	}
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", migrationAdvisoryLockID).Error; err != nil {
+			return fmt.Errorf("failed to acquire migration advisory lock: %w", err)
+		}
+		return migrate(tx)
+	})
 }
