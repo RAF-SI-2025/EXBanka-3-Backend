@@ -36,6 +36,10 @@ func requireAuthenticatedEmployeeHTTP(w http.ResponseWriter, r *http.Request, cf
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "invalid token"})
 		return nil, false
 	}
+	if util.IsTokenRevoked(r.Context(), claims) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "invalid token"})
+		return nil, false
+	}
 
 	return claims, true
 }

@@ -53,6 +53,9 @@ func AuthInterceptor(cfg *config.Config) grpc.UnaryServerInterceptor {
 		if claims.TokenType != "access" {
 			return nil, status.Error(codes.Unauthenticated, "wrong token type: expected access token")
 		}
+		if util.IsTokenRevoked(ctx, claims) {
+			return nil, status.Error(codes.Unauthenticated, "revoked token")
+		}
 
 		if claims.TokenSource == "client" {
 			requiredPerm, exists := clientRequiredPermissions[info.FullMethod]

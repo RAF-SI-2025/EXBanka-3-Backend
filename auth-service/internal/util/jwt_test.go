@@ -72,6 +72,9 @@ func TestParseToken_AccessRoundTrip(t *testing.T) {
 	if claims.TokenType != "access" {
 		t.Errorf("TokenType = %s, want access", claims.TokenType)
 	}
+	if claims.ID == "" {
+		t.Error("expected access token jti to be set")
+	}
 	if claims.TokenSource != "employee" {
 		t.Errorf("TokenSource = %s, want employee", claims.TokenSource)
 	}
@@ -90,6 +93,9 @@ func TestParseToken_RefreshRoundTrip(t *testing.T) {
 	if claims.TokenType != "refresh" {
 		t.Errorf("TokenType = %s, want refresh", claims.TokenType)
 	}
+	if claims.ID == "" {
+		t.Error("expected refresh token jti to be set")
+	}
 }
 
 func TestParseToken_ClientRoundTrip(t *testing.T) {
@@ -104,6 +110,9 @@ func TestParseToken_ClientRoundTrip(t *testing.T) {
 	}
 	if claims.TokenSource != "client" {
 		t.Errorf("TokenSource = %s, want client", claims.TokenSource)
+	}
+	if claims.ID == "" {
+		t.Error("expected client access token jti to be set")
 	}
 }
 

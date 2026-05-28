@@ -40,6 +40,10 @@ func parseHTTPClaims(w http.ResponseWriter, r *http.Request, cfg *config.Config)
 		writeAuthError(w, http.StatusUnauthorized, "invalid or expired token")
 		return nil, false
 	}
+	if util.IsTokenRevoked(r.Context(), claims) {
+		writeAuthError(w, http.StatusUnauthorized, "invalid or expired token")
+		return nil, false
+	}
 
 	return claims, true
 }

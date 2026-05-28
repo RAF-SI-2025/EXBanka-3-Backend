@@ -19,6 +19,7 @@ import (
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/middleware"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/repository"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/service"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/util"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -29,6 +30,8 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 
 	cfg := config.Load()
+	closeTokenRevocation := util.ConfigureTokenRevocationFromEnv("account-service")
+	defer closeTokenRevocation()
 
 	db, err := database.Connect(cfg)
 	if err != nil {

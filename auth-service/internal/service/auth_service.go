@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -96,6 +97,9 @@ func (s *AuthService) RefreshToken(refreshTokenStr string) (string, string, erro
 
 	if claims.TokenType != "refresh" {
 		return "", "", fmt.Errorf("wrong token type")
+	}
+	if util.IsTokenRevoked(context.Background(), claims) {
+		return "", "", fmt.Errorf("invalid refresh token")
 	}
 
 	emp, err := s.employeeRepo.FindByID(claims.EmployeeID)

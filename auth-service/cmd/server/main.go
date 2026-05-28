@@ -18,6 +18,7 @@ import (
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/auth-service/internal/handler"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/auth-service/internal/middleware"
 	infrasvc "github.com/RAF-SI-2025/EXBanka-3-Backend/auth-service/internal/service"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/auth-service/internal/util"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -30,6 +31,8 @@ func main() {
 	cfg := config.Load()
 	cfg.GRPCPort = envOrDefault("AUTH_GRPC_PORT", "9091")
 	cfg.HTTPPort = envOrDefault("AUTH_HTTP_PORT", "8081")
+	closeTokenRevocation := util.ConfigureTokenRevocationFromEnv("auth-service")
+	defer closeTokenRevocation()
 
 	db, err := database.Connect(cfg)
 	if err != nil {
@@ -61,6 +64,7 @@ func main() {
 	notifSvc := infrasvc.NewNotificationService(cfg)
 	authH := handler.NewAuthHandler(cfg, db, notifSvc)
 	clientAuthH := handler.NewClientAuthHandler(cfg, db, notifSvc)
+	logoutH := handler.NewLogoutHandler(cfg)
 
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
@@ -100,6 +104,8 @@ func main() {
 	httpMux.HandleFunc("/ready", readinessCheck(sqlDB))
 	httpMux.Handle("/api/v1/auth/client/login", middleware.CORS(http.HandlerFunc(clientAuthH.Login)))
 	httpMux.Handle("/api/v1/auth/client/activate", middleware.CORS(http.HandlerFunc(clientAuthH.Activate)))
+	httpMux.Handle("/api/v1/auth/logout", middleware.CORS(http.HandlerFunc(logoutH.Logout)))
+	httpMux.Handle("/api/v1/auth/client/logout", middleware.CORS(http.HandlerFunc(logoutH.Logout)))
 	httpMux.Handle("/", middleware.CORS(gwMux))
 
 	httpServer := &http.Server{

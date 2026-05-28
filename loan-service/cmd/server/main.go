@@ -18,12 +18,15 @@ import (
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/middleware"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/repository"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/service"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/util"
 )
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 
 	cfg := config.Load()
+	closeTokenRevocation := util.ConfigureTokenRevocationFromEnv("loan-service")
+	defer closeTokenRevocation()
 
 	db, err := database.Connect(cfg)
 	if err != nil {

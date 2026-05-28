@@ -1,7 +1,10 @@
 package util
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -9,9 +12,9 @@ import (
 
 type Claims struct {
 	EmployeeID  uint     `json:"employee_id"`
-	ClientID    uint     `json:"client_id"`    // 0 for employee tokens
+	ClientID    uint     `json:"client_id"` // 0 for employee tokens
 	Email       string   `json:"email"`
-	Username    string   `json:"username"`     // empty for client tokens
+	Username    string   `json:"username"` // empty for client tokens
 	Permissions []string `json:"permissions"`
 	TokenType   string   `json:"token_type"`   // "access" | "refresh"
 	TokenSource string   `json:"token_source"` // "employee" | "client"
@@ -29,6 +32,7 @@ func GenerateAccessToken(employeeID uint, email, username string, permissions []
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(durationMinutes) * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ID:        newJWTID(),
 		},
 	}
 
@@ -45,6 +49,7 @@ func GenerateRefreshToken(employeeID uint, email, username string, secret string
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(durationHours) * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ID:        newJWTID(),
 		},
 	}
 
@@ -61,6 +66,7 @@ func GenerateClientAccessToken(clientID uint, email string, permissions []string
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(durationMinutes) * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ID:        newJWTID(),
 		},
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
@@ -75,6 +81,7 @@ func GenerateClientRefreshToken(clientID uint, email string, secret string, dura
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(durationHours) * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ID:        newJWTID(),
 		},
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
@@ -97,6 +104,14 @@ func ParseToken(tokenString, secret string) (*Claims, error) {
 	}
 
 	return claims, nil
+}
+
+func newJWTID() string {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(bytes[:])
 }
 
 // employeeRoleLevel returns hierarchy level for employee roles.

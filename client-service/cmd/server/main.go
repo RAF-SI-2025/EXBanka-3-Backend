@@ -17,6 +17,7 @@ import (
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/client-service/internal/database"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/client-service/internal/handler"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/client-service/internal/middleware"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/client-service/internal/util"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -29,6 +30,8 @@ func main() {
 	cfg := config.Load()
 	cfg.GRPCPort = envOrDefault("CLIENT_GRPC_PORT", "9093")
 	cfg.HTTPPort = envOrDefault("CLIENT_HTTP_PORT", "8083")
+	closeTokenRevocation := util.ConfigureTokenRevocationFromEnv("client-service")
+	defer closeTokenRevocation()
 
 	db, err := database.Connect(cfg)
 	if err != nil {

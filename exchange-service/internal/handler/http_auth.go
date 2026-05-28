@@ -26,6 +26,10 @@ func requireAuthenticatedHTTP(w http.ResponseWriter, r *http.Request, cfg *confi
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "authentication required"})
 		return nil, false
 	}
+	if claims.TokenType != "access" || util.IsTokenRevoked(r.Context(), claims) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "authentication required"})
+		return nil, false
+	}
 	return claims, true
 }
 

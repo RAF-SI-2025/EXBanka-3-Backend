@@ -17,6 +17,7 @@ import (
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/transfer-service/internal/database"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/transfer-service/internal/handler"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/transfer-service/internal/middleware"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/transfer-service/internal/util"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -27,6 +28,8 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 
 	cfg := config.Load()
+	closeTokenRevocation := util.ConfigureTokenRevocationFromEnv("transfer-service")
+	defer closeTokenRevocation()
 
 	db, err := database.Connect(cfg)
 	if err != nil {

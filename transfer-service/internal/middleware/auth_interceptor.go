@@ -20,9 +20,9 @@ var requiredPermissions = map[string]string{
 
 // clientRequiredPermissions maps RPCs accessible to clients.
 var clientRequiredPermissions = map[string]string{
-	"/transfer.v1.TransferService/CreateTransfer":          models.PermClientBasic,
-	"/transfer.v1.TransferService/ListTransfersByAccount":  models.PermClientBasic,
-	"/transfer.v1.TransferService/ListTransfersByClient":   models.PermClientBasic,
+	"/transfer.v1.TransferService/CreateTransfer":         models.PermClientBasic,
+	"/transfer.v1.TransferService/ListTransfersByAccount": models.PermClientBasic,
+	"/transfer.v1.TransferService/ListTransfersByClient":  models.PermClientBasic,
 }
 
 type claimsContextKey struct{}
@@ -59,6 +59,9 @@ func AuthInterceptor(cfg *config.Config) grpc.UnaryServerInterceptor {
 
 		if claims.TokenType != "access" {
 			return nil, status.Error(codes.Unauthenticated, "wrong token type: expected access token")
+		}
+		if util.IsTokenRevoked(ctx, claims) {
+			return nil, status.Error(codes.Unauthenticated, "revoked token")
 		}
 
 		if claims.TokenSource == "client" {

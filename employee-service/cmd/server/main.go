@@ -18,6 +18,7 @@ import (
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/handler"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/middleware"
 	infrasvc "github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/service"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/util"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -30,6 +31,8 @@ func main() {
 	cfg := config.Load()
 	cfg.GRPCPort = envOrDefault("EMPLOYEE_GRPC_PORT", "9092")
 	cfg.HTTPPort = envOrDefault("EMPLOYEE_HTTP_PORT", "8082")
+	closeTokenRevocation := util.ConfigureTokenRevocationFromEnv("employee-service")
+	defer closeTokenRevocation()
 
 	db, err := database.Connect(cfg)
 	if err != nil {

@@ -105,7 +105,7 @@ func (h *TransferMobileVerificationHandler) authorize(w http.ResponseWriter, r *
 		}
 		tokenStr := strings.TrimSpace(authHeader[len("Bearer "):])
 		claims, err := util.ParseToken(tokenStr, h.cfg.JWTSecret)
-		if err != nil || claims.TokenType != "access" || claims.ClientID == 0 || claims.TokenSource != "client" {
+		if err != nil || claims.TokenType != "access" || util.IsTokenRevoked(r.Context(), claims) || claims.ClientID == 0 || claims.TokenSource != "client" {
 			writeTransferJSON(w, http.StatusUnauthorized, map[string]interface{}{"message": "invalid or expired token"})
 			return 0, false
 		}
