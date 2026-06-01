@@ -285,6 +285,9 @@ func TestNewInterbankReconcileRunner_Constructs(t *testing.T) {
 		db, nil, nil,
 		repository.NewInterbankPaymentRepository(db),
 		repository.NewInterbankPaymentWalletRepository(db),
+		repository.NewInterbankExerciseRepository(db),
+		repository.NewInterbankWalletRepository(db),
+		repository.NewInterbankOtcRepository(db),
 	)
 	if r == nil {
 		t.Fatal("expected non-nil runner")
@@ -523,6 +526,9 @@ func TestInterbankReconcileRunner_Run_EmptyTable(t *testing.T) {
 		db, nil, nil,
 		repository.NewInterbankPaymentRepository(db),
 		repository.NewInterbankPaymentWalletRepository(db),
+		repository.NewInterbankExerciseRepository(db),
+		repository.NewInterbankWalletRepository(db),
+		repository.NewInterbankOtcRepository(db),
 	)
 	r.Run() // empty table — exits cleanly
 }

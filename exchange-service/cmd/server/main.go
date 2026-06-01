@@ -123,9 +123,9 @@ func main() {
 	ibDispatchProcessor := interbank.NewDispatchTxProcessor(ibOtcProcessor, ibPaymentProcessor, ibExerciseProcessor, ibPaymentRepo, ibPendingRepo, ibExerciseRepo)
 	ibServer := interbank.NewServer(ibRegistry, ibInboundRepo, ibDispatchProcessor)
 	ibOtcH := interbank.NewOTCHandler(ibRegistry, portfolioRepo, interbank.StubDisplayNameResolver{})
-	ibNegH := interbank.NewNegotiationsHandler(ibRegistry, ibNegRepo, ibClient, db, ibWalletRepo)
+	ibNegH := interbank.NewNegotiationsHandler(ibRegistry, ibNegRepo, ibClient, db, ibWalletRepo, portfolioRepo, marketRepo)
 
-	ibReconcile := service.NewInterbankReconcileRunner(db, ibRegistry, ibClient, ibPaymentRepo, ibPaymentWalletRepo)
+	ibReconcile := service.NewInterbankReconcileRunner(db, ibRegistry, ibClient, ibPaymentRepo, ibPaymentWalletRepo, ibExerciseRepo, ibWalletRepo, ibNegRepo)
 	ibPublicStockRepo := repository.NewRemotePublicStockRepository(db)
 	ibPublicStockCache := service.NewPublicStockCacheRunner(ibRegistry, ibClient, ibPublicStockRepo)
 

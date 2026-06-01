@@ -111,6 +111,28 @@ type InterbankOtcNegotiation struct {
 
 	IsOngoing bool `gorm:"column:is_ongoing;not null;default:true;index"`
 
+	// SellerReservedHoldingID is the local portfolio holding whose shares
+	// we reserved when WE (the seller's bank) accepted this negotiation,
+	// backing the option contract per spec §2.7.2. Non-nil only on
+	// seller-role rows between acceptance and exercise/expiry; set back to
+	// nil once the reservation is released (on exercise, on a reopened
+	// accept, or by the settlement-expiry sweep). nil for buyer-role rows
+	// and bank-side sellers (for which we hold no portfolio reservation).
+	SellerReservedHoldingID *uint `gorm:"column:seller_reserved_holding_id;index"`
+
+	// AcceptTxID / AcceptTxRoutingNumber record the transactionId of the
+	// option-acceptance NEW_TX we (the seller's bank) dispatched to the
+	// buyer's bank. They are set only after the buyer voted YES, so their
+	// presence means "the buyer reserved the premium and we owe a
+	// COMMIT_TX + local seller credit". AcceptCommitFinalisedAt is stamped
+	// once both land. The reconcile cron resends COMMIT_TX for rows where
+	// AcceptTxID is set and AcceptCommitFinalisedAt is NULL — closing the
+	// window where a crash after the YES vote would otherwise strand the
+	// buyer's reserved premium indefinitely.
+	AcceptTxRoutingNumber   int        `gorm:"column:accept_tx_routing_number;not null;default:0"`
+	AcceptTxID              string     `gorm:"column:accept_tx_id;type:varchar(64);not null;default:''"`
+	AcceptCommitFinalisedAt *time.Time `gorm:"column:accept_commit_finalised_at"`
+
 	CreatedAt time.Time `gorm:"not null"`
 	UpdatedAt time.Time `gorm:"not null"`
 }

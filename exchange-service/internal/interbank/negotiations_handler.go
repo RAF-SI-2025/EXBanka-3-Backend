@@ -25,31 +25,38 @@ import (
 // negotiations_accept.go because it owns the outbound NEW_TX dispatch
 // that the other verbs don't need.
 type NegotiationsHandler struct {
-	registry   *Registry
-	repo       *repository.InterbankOtcRepository
-	client     *Client
-	db         *gorm.DB
-	walletRepo *repository.InterbankWalletRepository
+	registry      *Registry
+	repo          *repository.InterbankOtcRepository
+	client        *Client
+	db            *gorm.DB
+	walletRepo    *repository.InterbankWalletRepository
+	portfolioRepo *repository.PortfolioRepository
+	marketRepo    *repository.MarketRepository
 }
 
 // NewNegotiationsHandler wires up the negotiation routes. db and
 // walletRepo are used by runAcceptDispatch to credit the local
-// seller's wallet after a successful COMMIT_TX — they're left
-// nil-safe-checked in the dispatch path so older test setups that
-// don't need a real wallet can still construct the handler.
+// seller's wallet after a successful COMMIT_TX; portfolioRepo and
+// marketRepo back the §2.7.2 seller-stock reservation taken on accept.
+// All four are left nil-safe-checked in the dispatch path so older test
+// setups that don't need a real ledger can still construct the handler.
 func NewNegotiationsHandler(
 	registry *Registry,
 	repo *repository.InterbankOtcRepository,
 	client *Client,
 	db *gorm.DB,
 	walletRepo *repository.InterbankWalletRepository,
+	portfolioRepo *repository.PortfolioRepository,
+	marketRepo *repository.MarketRepository,
 ) *NegotiationsHandler {
 	return &NegotiationsHandler{
-		registry:   registry,
-		repo:       repo,
-		client:     client,
-		db:         db,
-		walletRepo: walletRepo,
+		registry:      registry,
+		repo:          repo,
+		client:        client,
+		db:            db,
+		walletRepo:    walletRepo,
+		portfolioRepo: portfolioRepo,
+		marketRepo:    marketRepo,
 	}
 }
 
@@ -241,6 +248,17 @@ func (h *NegotiationsHandler) update(w http.ResponseWriter, r *http.Request, rou
 		return
 	}
 
+	// Turn order (§3.3): only the party who did NOT make the last offer
+	// may counter. The spec defines "the turn is buyer's iff
+	// off.lastModifiedBy ≠ off.buyerId" — equivalently, the next mover
+	// must differ from the last mover. Reject the wrong party with 409
+	// Conflict before we touch the stored terms.
+	if !callerMayCounter(neg, partner) {
+		writeProblemJSON(w, http.StatusConflict,
+			"not your turn to counter-offer — the other party moves next")
+		return
+	}
+
 	var offer OtcOffer
 	if err := decodeJSONBody(r, &offer); err != nil {
 		writeProblemJSON(w, http.StatusBadRequest, err.Error())
@@ -337,6 +355,16 @@ func negotiationToWire(neg *models.InterbankOtcNegotiation) OtcNegotiation {
 func partnerMayAccess(neg *models.InterbankOtcNegotiation, partner *PartnerBank) bool {
 	code := int(partner.Code)
 	return neg.BuyerRoutingNumber == code || neg.SellerRoutingNumber == code
+}
+
+// callerMayCounter enforces the §3.3 turn rule: a counter-offer may only
+// be placed by the party who did NOT make the most recent offer. Since a
+// cross-bank negotiation always has exactly two parties at distinct
+// banks, "did not move last" reduces to "this bank is not the last
+// modifier". The caller is assumed to already be a party to the
+// negotiation (partnerMayAccess checked upstream).
+func callerMayCounter(neg *models.InterbankOtcNegotiation, partner *PartnerBank) bool {
+	return neg.LastModifiedByRoutingNumber != int(partner.Code)
 }
 
 func decodeJSONBody(r *http.Request, dst any) error {

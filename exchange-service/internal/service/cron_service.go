@@ -51,8 +51,10 @@ func StartCronJobs(
 
 	// OTC option expiry: release reserved shares after settlement date passes.
 	otcSvc := NewOtcService(repository.NewPortfolioRepository(db), repository.NewOtcRepository(db))
+	ibOtcRepo := repository.NewInterbankOtcRepository(db)
 	_, err = c.AddFunc("@every 1h", func() {
 		expireDueOtcContracts(otcSvc)
+		expireDueInterbankReservations(ibOtcRepo)
 	})
 	if err != nil {
 		slog.Error("Failed to add OTC expiry cron job", "error", err)
@@ -142,6 +144,22 @@ func expireDueOtcContracts(otcSvc *OtcService) {
 	}
 	if expired > 0 {
 		slog.Info("Expired OTC contracts", "count", expired)
+	}
+}
+
+// expireDueInterbankReservations un-reserves the seller's stock for
+// cross-bank OTC options that were never exercised and whose settlement
+// date has passed (§2.7.2). The backstop for any reservation a failed
+// accept left behind, and the normal path for accepted-but-unexercised
+// options.
+func expireDueInterbankReservations(ibOtcRepo *repository.InterbankOtcRepository) {
+	released, err := ibOtcRepo.ExpireDueSellerReservations(time.Now().UTC())
+	if err != nil {
+		slog.Error("Failed to expire inter-bank seller reservations", "error", err)
+		return
+	}
+	if released > 0 {
+		slog.Info("Released expired inter-bank seller reservations", "count", released)
 	}
 }
 
