@@ -136,7 +136,58 @@ func (r *InterbankExerciseRepository) MarkFailedCAS(tx *gorm.DB, routing int, id
 	return res.RowsAffected, nil
 }
 
-// MarkPartnerFinalised stamps PartnerFinalisedAt — used by the (future)
+// ListStuckPendingOutbound returns outbound exercises stuck in `pending`
+// past the staleness threshold — the buyer-bank reserved the strike cash
+// and persisted the row but never recorded a vote (crash/timeout between
+// reserve and the NEW_TX response). The reconcile cron rolls these back:
+// the local commit never ran, so releasing the reservation is the safe
+// recovery and the buyer can re-exercise (the option is not consumed).
+func (r *InterbankExerciseRepository) ListStuckPendingOutbound(threshold time.Time, limit int) ([]models.InterbankPendingExercise, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	var rows []models.InterbankPendingExercise
+	err := r.db.
+		Where("direction = ? AND status = ? AND updated_at < ?",
+			models.InterbankExerciseDirectionOutbound,
+			models.InterbankExerciseStatusPending,
+			threshold,
+		).
+		Order("updated_at ASC").
+		Limit(limit).
+		Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("listing stuck pending exercises: %w", err)
+	}
+	return rows, nil
+}
+
+// ListUndispatchedTerminalOutbound returns outbound exercises whose status
+// is resolved (committed / failed) but whose terminal partner message has
+// not been acknowledged (partner_finalised_at IS NULL). The cron replays
+// COMMIT_TX (committed) or ROLLBACK_TX (failed) for these. `rejected` is
+// excluded — the partner voted NO and holds no resources.
+func (r *InterbankExerciseRepository) ListUndispatchedTerminalOutbound(threshold time.Time, limit int) ([]models.InterbankPendingExercise, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	var rows []models.InterbankPendingExercise
+	err := r.db.
+		Where("direction = ? AND status IN ? AND partner_finalised_at IS NULL AND updated_at < ?",
+			models.InterbankExerciseDirectionOutbound,
+			[]string{models.InterbankExerciseStatusCommitted, models.InterbankExerciseStatusFailed},
+			threshold,
+		).
+		Order("updated_at ASC").
+		Limit(limit).
+		Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("listing undispatched terminal exercises: %w", err)
+	}
+	return rows, nil
+}
+
+// MarkPartnerFinalised stamps PartnerFinalisedAt — used by the
 // reconciliation cron to stop replaying the terminal message once the
 // partner has ACKed it.
 func (r *InterbankExerciseRepository) MarkPartnerFinalised(tx *gorm.DB, routing int, id string) (int64, error) {

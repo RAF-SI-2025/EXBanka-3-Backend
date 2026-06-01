@@ -233,6 +233,14 @@ func (p *ExerciseTxProcessor) OnCommitTx(_ context.Context, _ *PartnerBank, txID
 		return fmt.Errorf("looking up listing for ticker %q: %w", pending.StockTicker, err)
 	}
 
+	// Load the negotiation so we can release the stock reservation taken
+	// at acceptance (§2.7.2). Without releasing it first, RecordSellFillTx
+	// rejects the sale (newQty < reserved_quantity) and the commit loops.
+	neg, err := p.negRepo.Get(pending.NegotiationRoutingNumber, pending.NegotiationID)
+	if err != nil {
+		return fmt.Errorf("loading negotiation for exercise commit: %w", err)
+	}
+
 	txErr := p.db.Transaction(func(dbtx *gorm.DB) error {
 		rows, err := p.exerciseRepo.MarkCommittedCAS(dbtx, int(txID.RoutingNumber), txID.ID)
 		if err != nil {
@@ -240,6 +248,16 @@ func (p *ExerciseTxProcessor) OnCommitTx(_ context.Context, _ *PartnerBank, txID
 		}
 		if rows == 0 {
 			return errExerciseAlreadyResolved
+		}
+
+		// Release the seller's reservation so the shares are free to be
+		// sold below. Clears the negotiation's reservation marker too.
+		if neg != nil && neg.SellerReservedHoldingID != nil {
+			if err := p.negRepo.ReleaseSellerReservationTx(dbtx,
+				neg.NegotiationRoutingNumber, neg.NegotiationID,
+				*neg.SellerReservedHoldingID, pending.StockAmount); err != nil {
+				return fmt.Errorf("releasing seller reservation on exercise: %w", err)
+			}
 		}
 
 		// Seller's stocks leave the holding — record at the strike

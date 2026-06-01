@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/repository"
 )
 
 // AcceptOutcome is the structured result of a runAcceptDispatch call.
@@ -134,10 +136,17 @@ func (h *NegotiationsHandler) AcceptForLocalSeller(
 // bank has already promised to hold the resources for our YES vote,
 // so reopening would risk double-spend.
 func (h *NegotiationsHandler) runAcceptDispatch(ctx context.Context, neg *models.InterbankOtcNegotiation) AcceptOutcome {
-	// Close locally first so a concurrent second accept can't
-	// double-dispatch.
-	if err := h.repo.MarkClosed(neg.NegotiationRoutingNumber, neg.NegotiationID); err != nil {
-		return AcceptOutcome{DispatchErr: fmt.Errorf("closing negotiation: %w", err)}
+	// Close the negotiation AND reserve the seller's stock in one local
+	// transaction (§2.7.2): the option contract we're about to form must
+	// be backed by reserved shares, and closing first stops a concurrent
+	// second accept from double-dispatching. If the seller can't back the
+	// option, we abort before dispatch — the negotiation stays open so the
+	// participants can renegotiate.
+	reservedHoldingID, err := h.closeAndReserveSeller(neg)
+	if err != nil {
+		slog.Warn("interbank: accept aborted — could not reserve seller stock",
+			"err", err, "negotiation", neg.NegotiationID)
+		return AcceptOutcome{DispatchErr: fmt.Errorf("reserving seller stock: %w", err)}
 	}
 
 	tx := buildOptionAcceptanceTx(h.registry.OwnRoutingNumber(), neg)
@@ -148,6 +157,13 @@ func (h *NegotiationsHandler) runAcceptDispatch(ctx context.Context, neg *models
 	if err != nil {
 		slog.Error("interbank: NEW_TX dispatch failed during accept",
 			"err", err, "negotiation", neg.NegotiationID, "buyer", buyerCode)
+		// We don't know whether the buyer processed the NEW_TX and voted
+		// YES (reserving the premium) before the response was lost. Send a
+		// best-effort ROLLBACK_TX so any premium the buyer reserved is
+		// released — it's a no-op at the buyer if they never saw the
+		// NEW_TX. Then release our own reservation and reopen.
+		h.bestEffortRollback(buyerCode, tx.TransactionID, neg.NegotiationID)
+		h.releaseSellerReservation(neg, reservedHoldingID)
 		h.reopenAfterDispatchFailure(neg.NegotiationRoutingNumber, neg.NegotiationID,
 			neg.LastModifiedByRoutingNumber, neg.LastModifiedByID)
 		return AcceptOutcome{DispatchErr: err}
@@ -156,34 +172,41 @@ func (h *NegotiationsHandler) runAcceptDispatch(ctx context.Context, neg *models
 	if vote.Vote != VoteYes {
 		// Buyer's bank refused — we don't send ROLLBACK_TX because
 		// NEW_TX with vote=NO is itself the rollback; the buyer's
-		// bank holds no resources after a NO. Reopen so participants
-		// can keep going.
+		// bank holds no resources after a NO. Release our reservation
+		// and reopen so participants can keep going.
 		slog.Info("interbank: NEW_TX received NO vote during accept",
 			"negotiation", neg.NegotiationID, "buyer", buyerCode, "reasons", vote.Reasons)
+		h.releaseSellerReservation(neg, reservedHoldingID)
 		h.reopenAfterDispatchFailure(neg.NegotiationRoutingNumber, neg.NegotiationID,
 			neg.LastModifiedByRoutingNumber, neg.LastModifiedByID)
 		return AcceptOutcome{Vote: vote}
 	}
 
-	// YES vote — commit. If COMMIT_TX itself fails after retries we
-	// leave the negotiation closed; the buyer's bank has already
-	// voted to hold the resources, so resolution is operator-driven
-	// (CHECK_STATUS / replay), not reopening the negotiation.
+	// YES vote — record the dispatched transactionId BEFORE committing, so
+	// a crash between here and a confirmed COMMIT_TX leaves a row the
+	// reconcile cron can finish (otherwise the buyer's reserved premium is
+	// stranded). The negotiation stays closed; the buyer's bank has voted
+	// to hold the resources, so resolution is by replay, not reopening.
+	if err := h.repo.SetAcceptDispatched(neg.NegotiationRoutingNumber, neg.NegotiationID,
+		int(tx.TransactionID.RoutingNumber), tx.TransactionID.ID); err != nil {
+		slog.Error("interbank: persisting accept dispatch state failed",
+			"err", err, "negotiation", neg.NegotiationID, "transaction", tx.TransactionID.ID)
+		return AcceptOutcome{Vote: vote, CommitErr: err}
+	}
+
 	commitKey := h.client.NewIdempotenceKey()
 	if err := h.client.SendCommitTx(ctx, buyerCode, commitKey, tx.TransactionID); err != nil {
-		slog.Error("interbank: COMMIT_TX dispatch failed after YES vote",
+		slog.Error("interbank: COMMIT_TX dispatch failed after YES vote; reconcile cron will resend",
 			"err", err, "negotiation", neg.NegotiationID, "transaction", tx.TransactionID.ID, "buyer", buyerCode)
 		return AcceptOutcome{Vote: vote, CommitErr: err}
 	}
 
-	// COMMIT_TX succeeded — the partner has moved the premium out
-	// of the buyer's wallet. Mirror it locally by crediting our
-	// seller's wallet so the books match the protocol state. A
-	// failure here is reported via CommitErr (same operator-action
-	// signal as a COMMIT_TX failure) because the negotiation is
-	// already closed and the partner has already committed.
-	if err := h.creditLocalSeller(neg); err != nil {
-		slog.Error("interbank: seller wallet credit failed after COMMIT_TX",
+	// COMMIT_TX succeeded — credit our seller and stamp the accept as
+	// finalised in one transaction so the credit lands exactly once even
+	// if the cron also runs. A failure here is reported via CommitErr; the
+	// cron retries (idempotent COMMIT_TX + CAS-guarded credit).
+	if err := FinaliseAcceptCommit(h.db, h.walletRepo, h.repo, neg); err != nil {
+		slog.Error("interbank: seller credit / finalise failed after COMMIT_TX; cron will retry",
 			"err", err, "negotiation", neg.NegotiationID, "transaction", tx.TransactionID.ID,
 			"seller", neg.SellerID, "currency", neg.PremiumCurrency, "amount", neg.PremiumAmount)
 		return AcceptOutcome{Vote: vote, CommitErr: fmt.Errorf("local seller credit failed after commit: %w", err)}
@@ -192,22 +215,135 @@ func (h *NegotiationsHandler) runAcceptDispatch(ctx context.Context, neg *models
 	return AcceptOutcome{Vote: vote}
 }
 
-// creditLocalSeller credits the seller's wallet by the premium
-// amount in a single DB transaction. The negotiation row was
-// already moved to closed before dispatch, so there's no other
-// local state to bundle.
-//
-// When db or walletRepo are nil (older test wiring), the credit is
-// skipped silently — the protocol state is correct on the wire even
-// without the local-books update, and the production path always
-// supplies both deps via NewNegotiationsHandler in main.go.
-func (h *NegotiationsHandler) creditLocalSeller(neg *models.InterbankOtcNegotiation) error {
-	if h.db == nil || h.walletRepo == nil {
+// FinaliseAcceptCommit credits the local seller's premium and stamps the
+// negotiation's accept-commit as finalised, atomically, so the credit
+// happens exactly once across retries. Shared by the inline accept path
+// and the reconcile cron. The stamp is a CAS (WHERE finalised IS NULL):
+// the credit only runs when this caller wins the CAS, so a concurrent
+// retry can't double-credit. For bank-side sellers (no client wallet) the
+// credit is skipped but the stamp still lands. A nil db/negRepo (older
+// test wiring) is a silent no-op.
+func FinaliseAcceptCommit(
+	db *gorm.DB,
+	walletRepo *repository.InterbankWalletRepository,
+	negRepo *repository.InterbankOtcRepository,
+	neg *models.InterbankOtcNegotiation,
+) error {
+	if db == nil || negRepo == nil {
 		return nil
 	}
-	return h.db.Transaction(func(tx *gorm.DB) error {
-		return h.walletRepo.Credit(tx, neg.SellerID, neg.PremiumCurrency, neg.PremiumAmount)
+	return db.Transaction(func(tx *gorm.DB) error {
+		won, err := negRepo.MarkAcceptCommitFinalisedCASTx(tx, neg.NegotiationRoutingNumber, neg.NegotiationID)
+		if err != nil {
+			return err
+		}
+		if won == 0 {
+			// Already finalised by a concurrent caller — don't credit again.
+			return nil
+		}
+		if walletRepo == nil {
+			return nil
+		}
+		// Only client sellers hold a local wallet to credit.
+		if sellerType, _, derr := DecodeLocalParticipantID(neg.SellerID); derr != nil || sellerType != LocalParticipantClient {
+			return nil
+		}
+		return walletRepo.Credit(tx, neg.SellerID, neg.PremiumCurrency, neg.PremiumAmount)
 	})
+}
+
+// bestEffortRollback sends a ROLLBACK_TX to the buyer's bank on its own
+// short-lived context, used when a NEW_TX dispatch failed and we can't
+// tell whether the buyer reserved the premium. A failure here is logged,
+// not surfaced — if the buyer did reserve and this also fails, their own
+// reconcile / operator path is the backstop.
+func (h *NegotiationsHandler) bestEffortRollback(buyerCode RoutingNumber, txID ForeignBankId, negID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	key := h.client.NewIdempotenceKey()
+	if err := h.client.SendRollbackTx(ctx, buyerCode, key, txID); err != nil {
+		slog.Warn("interbank: best-effort ROLLBACK_TX after accept NEW_TX failure did not land",
+			"err", err, "negotiation", negID, "transaction", txID.ID, "buyer", buyerCode)
+	}
+}
+
+// closeAndReserveSeller closes the negotiation and reserves the seller's
+// stock to back the option contract (§2.7.2), atomically. It returns the
+// id of the holding reserved against, or nil when no reservation was
+// taken (bank-side seller, or test wiring without portfolio/market
+// repos). A non-nil error means the seller cannot back the option and the
+// negotiation was left open — the caller must NOT dispatch.
+func (h *NegotiationsHandler) closeAndReserveSeller(neg *models.InterbankOtcNegotiation) (*uint, error) {
+	// Without the ledger repos (older/test wiring) we can't reserve — just
+	// close. The wire state stays correct; only the local-books
+	// reservation is skipped.
+	if h.db == nil || h.portfolioRepo == nil || h.marketRepo == nil {
+		if err := h.repo.MarkClosed(neg.NegotiationRoutingNumber, neg.NegotiationID); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+
+	// Bank-side sellers hold no portfolio reservation — exercise likewise
+	// only supports client sellers. Close without reserving.
+	sellerType, sellerUID, err := DecodeLocalParticipantID(neg.SellerID)
+	if err != nil || sellerType != LocalParticipantClient {
+		if cErr := h.repo.MarkClosed(neg.NegotiationRoutingNumber, neg.NegotiationID); cErr != nil {
+			return nil, cErr
+		}
+		return nil, nil
+	}
+
+	listing, err := h.marketRepo.GetListingRecordByTicker(neg.StockTicker)
+	if err != nil {
+		return nil, fmt.Errorf("looking up listing for %q: %w", neg.StockTicker, err)
+	}
+	if listing == nil {
+		return nil, fmt.Errorf("no listing for ticker %q", neg.StockTicker)
+	}
+	holding, err := h.portfolioRepo.GetHoldingByUserAndAsset(sellerUID, "client", listing.ID)
+	if err != nil {
+		return nil, fmt.Errorf("looking up seller holding: %w", err)
+	}
+	if holding == nil {
+		return nil, fmt.Errorf("seller holds no %s to back the option", neg.StockTicker)
+	}
+
+	holdingID := holding.ID
+	if err := h.db.Transaction(func(dbtx *gorm.DB) error {
+		if err := h.portfolioRepo.ReserveHoldingQuantityTx(dbtx, holdingID, neg.Amount); err != nil {
+			return err
+		}
+		return dbtx.Model(&models.InterbankOtcNegotiation{}).
+			Where("negotiation_routing_number = ? AND negotiation_id = ?",
+				neg.NegotiationRoutingNumber, neg.NegotiationID).
+			Updates(map[string]interface{}{
+				"is_ongoing":                 false,
+				"seller_reserved_holding_id": holdingID,
+				"updated_at":                 time.Now().UTC(),
+			}).Error
+	}); err != nil {
+		return nil, err
+	}
+	return &holdingID, nil
+}
+
+// releaseSellerReservation undoes the reservation taken by
+// closeAndReserveSeller. Called when a dispatch fails or the buyer's bank
+// votes NO, so the seller's shares aren't stranded. Best-effort: a
+// failure here is logged, not surfaced — the settlement-expiry sweep is
+// the backstop that reclaims any reservation left behind.
+func (h *NegotiationsHandler) releaseSellerReservation(neg *models.InterbankOtcNegotiation, holdingID *uint) {
+	if holdingID == nil || h.db == nil || h.repo == nil {
+		return
+	}
+	if err := h.db.Transaction(func(dbtx *gorm.DB) error {
+		return h.repo.ReleaseSellerReservationTx(dbtx,
+			neg.NegotiationRoutingNumber, neg.NegotiationID, *holdingID, neg.Amount)
+	}); err != nil {
+		slog.Error("interbank: releasing seller reservation after failed accept",
+			"err", err, "negotiation", neg.NegotiationID, "holding", *holdingID)
+	}
 }
 
 // buildOptionAcceptanceTx builds the protocol Transaction that

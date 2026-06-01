@@ -230,48 +230,60 @@ func (r *PortfolioRepository) SetHoldingPublicQuantity(id uint, publicQuantity f
 }
 
 func (r *PortfolioRepository) ReserveHoldingQuantity(id uint, quantity float64) error {
-	if quantity <= 0 {
-		return fmt.Errorf("reserved quantity must be positive")
-	}
-
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		var h models.PortfolioHoldingRecord
-		if err := tx.Preload("Asset").First(&h, id).Error; err != nil {
-			return err
-		}
-		if h.Asset.Type != string(models.ListingTypeStock) {
-			return fmt.Errorf("only stock holdings can be reserved for OTC")
-		}
-		if h.AvailableForOTC() < quantity {
-			return fmt.Errorf("insufficient public OTC quantity")
-		}
-
-		return tx.Model(&h).Updates(map[string]interface{}{
-			"reserved_quantity": h.ReservedQuantity + quantity,
-			"updated_at":        time.Now().UTC(),
-		}).Error
+		return r.ReserveHoldingQuantityTx(tx, id, quantity)
 	})
 }
 
+// ReserveHoldingQuantityTx is the transaction-composable form of
+// ReserveHoldingQuantity, so callers that must reserve atomically with
+// other ledger effects (e.g. the cross-bank OTC acceptance flow) can run
+// it inside their own *gorm.DB transaction.
+func (r *PortfolioRepository) ReserveHoldingQuantityTx(tx *gorm.DB, id uint, quantity float64) error {
+	if quantity <= 0 {
+		return fmt.Errorf("reserved quantity must be positive")
+	}
+	var h models.PortfolioHoldingRecord
+	if err := tx.Preload("Asset").First(&h, id).Error; err != nil {
+		return err
+	}
+	if h.Asset.Type != string(models.ListingTypeStock) {
+		return fmt.Errorf("only stock holdings can be reserved for OTC")
+	}
+	if h.AvailableForOTC() < quantity {
+		return fmt.Errorf("insufficient public OTC quantity")
+	}
+	return tx.Model(&h).Updates(map[string]interface{}{
+		"reserved_quantity": h.ReservedQuantity + quantity,
+		"updated_at":        time.Now().UTC(),
+	}).Error
+}
+
 func (r *PortfolioRepository) ReleaseHoldingReservedQuantity(id uint, quantity float64) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return r.ReleaseHoldingReservedQuantityTx(tx, id, quantity)
+	})
+}
+
+// ReleaseHoldingReservedQuantityTx is the transaction-composable form of
+// ReleaseHoldingReservedQuantity. Used by the cross-bank OTC exercise and
+// settlement-expiry paths, which must release the seller's reservation in
+// the same transaction as the rest of their ledger effects.
+func (r *PortfolioRepository) ReleaseHoldingReservedQuantityTx(tx *gorm.DB, id uint, quantity float64) error {
 	if quantity <= 0 {
 		return fmt.Errorf("released quantity must be positive")
 	}
-
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		var h models.PortfolioHoldingRecord
-		if err := tx.First(&h, id).Error; err != nil {
-			return err
-		}
-		if quantity > h.ReservedQuantity {
-			return fmt.Errorf("released quantity exceeds reserved OTC quantity")
-		}
-
-		return tx.Model(&h).Updates(map[string]interface{}{
-			"reserved_quantity": h.ReservedQuantity - quantity,
-			"updated_at":        time.Now().UTC(),
-		}).Error
-	})
+	var h models.PortfolioHoldingRecord
+	if err := tx.First(&h, id).Error; err != nil {
+		return err
+	}
+	if quantity > h.ReservedQuantity {
+		return fmt.Errorf("released quantity exceeds reserved OTC quantity")
+	}
+	return tx.Model(&h).Updates(map[string]interface{}{
+		"reserved_quantity": h.ReservedQuantity - quantity,
+		"updated_at":        time.Now().UTC(),
+	}).Error
 }
 
 func setHoldingPublicQuantity(tx *gorm.DB, h *models.PortfolioHoldingRecord, publicQuantity float64) error {

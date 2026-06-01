@@ -44,6 +44,19 @@ type InterbankReconcileRunner struct {
 	paymentRepo *repository.InterbankPaymentRepository
 	walletRepo  *repository.InterbankPaymentWalletRepository
 
+	// Exercise reconciliation deps. exerciseRepo + otcWalletRepo drive
+	// the cross-bank OTC option-exercise recovery (terminal resend +
+	// stuck-pending rollback). Both may be nil — when so, the exercise
+	// half of Run() is skipped, so existing payment-only wiring keeps
+	// working.
+	exerciseRepo  *repository.InterbankExerciseRepository
+	otcWalletRepo *repository.InterbankWalletRepository
+
+	// negRepo drives OTC option-acceptance COMMIT_TX recovery (resend
+	// COMMIT_TX + seller credit for accepts that got a YES vote but never
+	// confirmed). Optional; nil skips that pass.
+	negRepo *repository.InterbankOtcRepository
+
 	// staleness is how old updated_at must be before a row is eligible.
 	// Defaults to 5 minutes; tests can override to exercise the cron
 	// without waiting wall-clock time.
@@ -54,22 +67,30 @@ type InterbankReconcileRunner struct {
 	batchSize int
 }
 
-// NewInterbankReconcileRunner wires the cron runner.
+// NewInterbankReconcileRunner wires the cron runner. exerciseRepo and
+// otcWalletRepo are optional; pass them to enable cross-bank OTC exercise
+// recovery alongside payment reconciliation.
 func NewInterbankReconcileRunner(
 	db *gorm.DB,
 	registry *interbank.Registry,
 	client *interbank.Client,
 	paymentRepo *repository.InterbankPaymentRepository,
 	walletRepo *repository.InterbankPaymentWalletRepository,
+	exerciseRepo *repository.InterbankExerciseRepository,
+	otcWalletRepo *repository.InterbankWalletRepository,
+	negRepo *repository.InterbankOtcRepository,
 ) *InterbankReconcileRunner {
 	return &InterbankReconcileRunner{
-		db:          db,
-		registry:    registry,
-		client:      client,
-		paymentRepo: paymentRepo,
-		walletRepo:  walletRepo,
-		staleness:   5 * time.Minute,
-		batchSize:   25,
+		db:            db,
+		registry:      registry,
+		client:        client,
+		paymentRepo:   paymentRepo,
+		walletRepo:    walletRepo,
+		exerciseRepo:  exerciseRepo,
+		otcWalletRepo: otcWalletRepo,
+		negRepo:       negRepo,
+		staleness:     5 * time.Minute,
+		batchSize:     25,
 	}
 }
 
@@ -104,6 +125,174 @@ func (r *InterbankReconcileRunner) Run() {
 			r.reconcileTerminal(ctx, &terminal[i])
 		}
 	}
+
+	r.runExercise(ctx, threshold)
+	r.runAcceptCommits(ctx, threshold)
+}
+
+// runAcceptCommits resends COMMIT_TX (and applies the seller credit) for
+// OTC option acceptances that got a YES vote but whose commit never
+// confirmed — closing the window where a crash after the vote would
+// strand the buyer's reserved premium. Idempotent: COMMIT_TX replays as a
+// no-op at the buyer, and FinaliseAcceptCommit CAS-guards the credit.
+func (r *InterbankReconcileRunner) runAcceptCommits(ctx context.Context, threshold time.Time) {
+	if r.negRepo == nil {
+		return
+	}
+	negs, err := r.negRepo.ListUndispatchedAcceptCommits(threshold, r.batchSize)
+	if err != nil {
+		slog.Error("interbank reconcile: listing undispatched accept commits", "err", err)
+		return
+	}
+	for i := range negs {
+		r.reconcileAcceptCommit(ctx, &negs[i])
+	}
+}
+
+func (r *InterbankReconcileRunner) reconcileAcceptCommit(ctx context.Context, neg *models.InterbankOtcNegotiation) {
+	buyerCode := interbank.RoutingNumber(neg.BuyerRoutingNumber)
+	txID := interbank.ForeignBankId{
+		RoutingNumber: interbank.RoutingNumber(neg.AcceptTxRoutingNumber),
+		ID:            neg.AcceptTxID,
+	}
+	key := r.client.NewIdempotenceKey()
+	if err := r.client.SendCommitTx(ctx, buyerCode, key, txID); err != nil {
+		slog.Info("interbank reconcile: accept COMMIT_TX resend transient failure",
+			"err", err, "negotiation", neg.NegotiationID, "tx_id", neg.AcceptTxID)
+		r.bumpNegotiationUpdatedAt(neg)
+		return
+	}
+	if err := interbank.FinaliseAcceptCommit(r.db, r.otcWalletRepo, r.negRepo, neg); err != nil {
+		slog.Error("interbank reconcile: seller credit / finalise failed after accept COMMIT_TX resend",
+			"err", err, "negotiation", neg.NegotiationID, "tx_id", neg.AcceptTxID)
+		return
+	}
+	slog.Info("interbank reconcile: accept COMMIT_TX resent and finalised",
+		"negotiation", neg.NegotiationID, "tx_id", neg.AcceptTxID)
+}
+
+func (r *InterbankReconcileRunner) bumpNegotiationUpdatedAt(neg *models.InterbankOtcNegotiation) {
+	now := time.Now().UTC()
+	if err := r.db.Model(&models.InterbankOtcNegotiation{}).
+		Where("id = ?", neg.ID).
+		Update("updated_at", now).Error; err != nil {
+		slog.Warn("interbank reconcile: failed to bump negotiation updated_at",
+			"err", err, "negotiation", neg.NegotiationID)
+		return
+	}
+	neg.UpdatedAt = now
+}
+
+// runExercise reconciles cross-bank OTC option exercises (the buyer-bank
+// outbound side). Two passes mirror the payment flow:
+//
+//  1. Stuck `pending` rows — the local commit never ran, so we release the
+//     buyer's strike-cash reservation and mark the row failed. The terminal
+//     pass then sends ROLLBACK_TX. The option contract is untouched, so the
+//     buyer can re-exercise.
+//  2. Resolved-but-undispatched rows — replay COMMIT_TX (committed) or
+//     ROLLBACK_TX (failed) until the seller's bank acknowledges.
+func (r *InterbankReconcileRunner) runExercise(ctx context.Context, threshold time.Time) {
+	if r.exerciseRepo == nil || r.otcWalletRepo == nil {
+		return
+	}
+
+	pending, err := r.exerciseRepo.ListStuckPendingOutbound(threshold, r.batchSize)
+	if err != nil {
+		slog.Error("interbank reconcile: listing stuck pending exercises", "err", err)
+	} else {
+		for i := range pending {
+			r.reconcileExercisePending(&pending[i])
+		}
+	}
+
+	terminal, err := r.exerciseRepo.ListUndispatchedTerminalOutbound(threshold, r.batchSize)
+	if err != nil {
+		slog.Error("interbank reconcile: listing undispatched terminal exercises", "err", err)
+	} else {
+		for i := range terminal {
+			r.reconcileExerciseTerminal(ctx, &terminal[i])
+		}
+	}
+}
+
+// reconcileExercisePending rolls back an exercise stuck in `pending`:
+// releases the reserved strike cash and marks the row failed. The next
+// terminal pass sends ROLLBACK_TX to the seller's bank. Safe because a
+// `pending` row means the local commit (cash debit + stock credit +
+// contract flip) never ran — only the reservation is outstanding.
+func (r *InterbankReconcileRunner) reconcileExercisePending(row *models.InterbankPendingExercise) {
+	err := r.db.Transaction(func(dbtx *gorm.DB) error {
+		rows, err := r.exerciseRepo.MarkFailedCAS(dbtx, row.TxRoutingNumber, row.TxID,
+			"reconcile: rolled back stuck pending exercise")
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return nil // already resolved by a concurrent path
+		}
+		row.Status = models.InterbankExerciseStatusFailed
+		return r.otcWalletRepo.Release(dbtx, row.BuyerID, row.PricePerUnitCurrency, row.CashAmount)
+	})
+	if err != nil {
+		slog.Error("interbank reconcile: rolling back stuck pending exercise",
+			"err", err, "exercise_id", row.ID, "tx_id", row.TxID)
+		return
+	}
+	slog.Info("interbank reconcile: released stuck pending exercise; ROLLBACK_TX will follow",
+		"exercise_id", row.ID, "tx_id", row.TxID)
+}
+
+// reconcileExerciseTerminal replays the terminal message for a resolved
+// exercise until the seller's bank acknowledges. Idempotent on the
+// receiver side.
+func (r *InterbankReconcileRunner) reconcileExerciseTerminal(ctx context.Context, row *models.InterbankPendingExercise) {
+	partnerCode := interbank.RoutingNumber(row.PartnerRoutingNumber)
+	key := r.client.NewIdempotenceKey()
+	txID := interbank.ForeignBankId{
+		RoutingNumber: interbank.RoutingNumber(row.TxRoutingNumber),
+		ID:            row.TxID,
+	}
+
+	var sendErr error
+	switch row.Status {
+	case models.InterbankExerciseStatusCommitted:
+		sendErr = r.client.SendCommitTx(ctx, partnerCode, key, txID)
+	case models.InterbankExerciseStatusFailed:
+		sendErr = r.client.SendRollbackTx(ctx, partnerCode, key, txID)
+	default:
+		slog.Warn("interbank reconcile: unexpected terminal exercise status",
+			"exercise_id", row.ID, "status", row.Status)
+		return
+	}
+
+	if sendErr != nil {
+		slog.Info("interbank reconcile: terminal exercise retry transient failure",
+			"err", sendErr, "exercise_id", row.ID, "status", row.Status)
+		r.bumpExerciseUpdatedAt(row)
+		return
+	}
+	if err := r.db.Transaction(func(dbtx *gorm.DB) error {
+		_, mErr := r.exerciseRepo.MarkPartnerFinalised(dbtx, row.TxRoutingNumber, row.TxID)
+		return mErr
+	}); err != nil {
+		slog.Warn("interbank reconcile: failed to stamp exercise partner_finalised_at",
+			"err", err, "exercise_id", row.ID)
+	}
+}
+
+// bumpExerciseUpdatedAt nudges updated_at forward so a transiently-failing
+// row doesn't get re-picked on the very next tick (coarse back-off).
+func (r *InterbankReconcileRunner) bumpExerciseUpdatedAt(row *models.InterbankPendingExercise) {
+	now := time.Now().UTC()
+	if err := r.db.Model(&models.InterbankPendingExercise{}).
+		Where("id = ?", row.ID).
+		Update("updated_at", now).Error; err != nil {
+		slog.Warn("interbank reconcile: failed to bump exercise updated_at",
+			"err", err, "exercise_id", row.ID)
+		return
+	}
+	row.UpdatedAt = now
 }
 
 // reconcilePending retries NEW_TX for a single stuck row. The partner's
