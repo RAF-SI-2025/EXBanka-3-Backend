@@ -414,7 +414,7 @@ func setupOrderHandler(t *testing.T, db *gorm.DB) *OrderHTTPHandler {
 		repository.NewMarketRepository(db),
 		&fakeRates{},
 	)
-	return NewOrderHTTPHandler(cfg, osvc)
+	return NewOrderHTTPHandler(cfg, osvc, nil)
 }
 
 func TestOrderHTTP_OrdersCollection_GetEmpty(t *testing.T) {

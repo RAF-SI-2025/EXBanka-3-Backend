@@ -93,7 +93,7 @@ func agentToken(t *testing.T, cfg *config.Config, emp *models.Employee) string {
 func TestListActuaries_WrongMethod_Returns405(t *testing.T) {
 	db := openHandlerDB(t, "list_act_method")
 	cfg := &config.Config{JWTSecret: "secret"}
-	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil))
+	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil), nil)
 
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/actuaries", nil)
 	w := httptest.NewRecorder()
@@ -107,7 +107,7 @@ func TestListActuaries_WrongMethod_Returns405(t *testing.T) {
 func TestListActuaries_NoAuth_Returns401(t *testing.T) {
 	db := openHandlerDB(t, "list_act_noauth")
 	cfg := &config.Config{JWTSecret: "secret"}
-	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil))
+	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil), nil)
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/actuaries", nil)
 	w := httptest.NewRecorder()
@@ -126,7 +126,7 @@ func TestListActuaries_SearchFilter(t *testing.T) {
 	createEmployee(t, db, "agent.alpha@bank.com", "alpha", models.PermEmployeeAgent)
 	createEmployee(t, db, "agent.beta@bank.com", "beta", models.PermEmployeeAgent)
 
-	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil))
+	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil), nil)
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/actuaries?q=alpha", nil)
 	r.Header.Set("Authorization", "Bearer "+supervisorToken(t, cfg, sup))
@@ -152,7 +152,7 @@ func TestActuaryRoutes_UpdateLimit_Success(t *testing.T) {
 	sup := createEmployee(t, db, "sup.limit@bank.com", "sup-limit", models.PermEmployeeSupervisor)
 	agent := createEmployee(t, db, "agent.limit@bank.com", "agent-limit", models.PermEmployeeAgent)
 
-	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil))
+	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil), nil)
 
 	body := `{"limit": 50000.0}`
 	r := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/v1/actuaries/%d/limit", agent.ID), strings.NewReader(body))
@@ -172,7 +172,7 @@ func TestActuaryRoutes_UpdateLimit_InvalidBody(t *testing.T) {
 	sup := createEmployee(t, db, "sup.limitb@bank.com", "sup-limitb", models.PermEmployeeSupervisor)
 	agent := createEmployee(t, db, "agent.limitb@bank.com", "agent-limitb", models.PermEmployeeAgent)
 
-	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil))
+	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil), nil)
 
 	r := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/v1/actuaries/%d/limit", agent.ID), strings.NewReader("not json"))
 	r.Header.Set("Authorization", "Bearer "+supervisorToken(t, cfg, sup))
@@ -191,7 +191,7 @@ func TestActuaryRoutes_ResetUsedLimit_Success(t *testing.T) {
 	sup := createEmployee(t, db, "sup.reset@bank.com", "sup-reset", models.PermEmployeeSupervisor)
 	agent := createEmployee(t, db, "agent.reset@bank.com", "agent-reset", models.PermEmployeeAgent)
 
-	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil))
+	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil), nil)
 
 	r := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/actuaries/%d/reset-used-limit", agent.ID), nil)
 	r.Header.Set("Authorization", "Bearer "+supervisorToken(t, cfg, sup))
@@ -210,7 +210,7 @@ func TestActuaryRoutes_SetNeedApproval_Success(t *testing.T) {
 	sup := createEmployee(t, db, "sup.approval@bank.com", "sup-approval", models.PermEmployeeSupervisor)
 	agent := createEmployee(t, db, "agent.approval@bank.com", "agent-approval", models.PermEmployeeAgent)
 
-	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil))
+	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil), nil)
 
 	body := `{"needApproval": true}`
 	r := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/v1/actuaries/%d/need-approval", agent.ID), strings.NewReader(body))
@@ -230,7 +230,7 @@ func TestActuaryRoutes_SetNeedApproval_InvalidBody(t *testing.T) {
 	sup := createEmployee(t, db, "sup.approvalbad@bank.com", "sup-approvalbad", models.PermEmployeeSupervisor)
 	agent := createEmployee(t, db, "agent.approvalbad@bank.com", "agent-approvalbad", models.PermEmployeeAgent)
 
-	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil))
+	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil), nil)
 
 	r := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/v1/actuaries/%d/need-approval", agent.ID), strings.NewReader("not json"))
 	r.Header.Set("Authorization", "Bearer "+supervisorToken(t, cfg, sup))
@@ -245,7 +245,7 @@ func TestActuaryRoutes_SetNeedApproval_InvalidBody(t *testing.T) {
 func TestActuaryRoutes_EmptyPath_Returns404(t *testing.T) {
 	db := openHandlerDB(t, "act_routes_empty")
 	cfg := &config.Config{JWTSecret: "secret"}
-	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil))
+	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil), nil)
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/actuaries/", nil)
 	w := httptest.NewRecorder()
@@ -259,7 +259,7 @@ func TestActuaryRoutes_EmptyPath_Returns404(t *testing.T) {
 func TestActuaryRoutes_InvalidEmployeeID_Returns400(t *testing.T) {
 	db := openHandlerDB(t, "act_routes_badid")
 	cfg := &config.Config{JWTSecret: "secret"}
-	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil))
+	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil), nil)
 
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/actuaries/notanumber/limit", nil)
 	w := httptest.NewRecorder()
@@ -273,7 +273,7 @@ func TestActuaryRoutes_InvalidEmployeeID_Returns400(t *testing.T) {
 func TestActuaryRoutes_NoAuth_Returns401(t *testing.T) {
 	db := openHandlerDB(t, "act_routes_noauth")
 	cfg := &config.Config{JWTSecret: "secret"}
-	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil))
+	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil), nil)
 
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/actuaries/1/limit", strings.NewReader(`{"limit":100}`))
 	w := httptest.NewRecorder()
@@ -290,7 +290,7 @@ func TestActuaryRoutes_AgentForbidden_Returns403(t *testing.T) {
 
 	agent := createEmployee(t, db, "agent.forbidden@bank.com", "agent-forbidden", models.PermEmployeeAgent)
 
-	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil))
+	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil), nil)
 
 	r := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/v1/actuaries/%d/limit", agent.ID), strings.NewReader(`{"limit":100}`))
 	r.Header.Set("Authorization", "Bearer "+agentToken(t, cfg, agent))
@@ -308,7 +308,7 @@ func TestActuaryRoutes_UnknownSubpath_Returns404(t *testing.T) {
 
 	sup := createEmployee(t, db, "sup.unknown@bank.com", "sup-unknown", models.PermEmployeeSupervisor)
 
-	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil))
+	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil), nil)
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/actuaries/1/unknown-action", nil)
 	r.Header.Set("Authorization", "Bearer "+supervisorToken(t, cfg, sup))
@@ -327,7 +327,7 @@ func TestActuaryRoutes_PatchLimit_Success(t *testing.T) {
 	sup := createEmployee(t, db, "sup.patch@bank.com", "sup-patch", models.PermEmployeeSupervisor)
 	agent := createEmployee(t, db, "agent.patch@bank.com", "agent-patch", models.PermEmployeeAgent)
 
-	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil))
+	h := NewActuaryHTTPHandler(cfg, service.NewEmployeeService(cfg, db, nil), nil)
 
 	body := `{"limit": 25000.0}`
 	r := httptest.NewRequest(http.MethodPatch, fmt.Sprintf("/api/v1/actuaries/%d/limit", agent.ID), strings.NewReader(body))
@@ -392,7 +392,7 @@ func TestEmployeeHandler_CreateEmployee_Success(t *testing.T) {
 	db := openHandlerDB(t, "grpc_create")
 	cfg := &config.Config{JWTSecret: "secret"}
 	svc := service.NewEmployeeService(cfg, db, nil)
-	h := NewEmployeeHandlerWithService(svc)
+	h := NewEmployeeHandlerWithService(svc, nil)
 
 	resp, err := h.CreateEmployee(context.Background(), &employeev1.CreateEmployeeRequest{
 		Ime:           "Ana",
@@ -423,7 +423,7 @@ func TestEmployeeHandler_CreateEmployee_DuplicateEmail_ReturnsInvalidArgument(t 
 	cfg := &config.Config{JWTSecret: "secret"}
 	createEmployee(t, db, "dup@bank.com", "dup-user")
 	svc := service.NewEmployeeService(cfg, db, nil)
-	h := NewEmployeeHandlerWithService(svc)
+	h := NewEmployeeHandlerWithService(svc, nil)
 
 	_, err := h.CreateEmployee(context.Background(), &employeev1.CreateEmployeeRequest{
 		Ime:      "X",
@@ -446,7 +446,7 @@ func TestEmployeeHandler_GetEmployee_Success(t *testing.T) {
 	cfg := &config.Config{JWTSecret: "secret"}
 	emp := createEmployee(t, db, "get.emp@bank.com", "get-emp")
 	svc := service.NewEmployeeService(cfg, db, nil)
-	h := NewEmployeeHandlerWithService(svc)
+	h := NewEmployeeHandlerWithService(svc, nil)
 
 	resp, err := h.GetEmployee(context.Background(), &employeev1.GetEmployeeRequest{Id: uint64(emp.ID)})
 
@@ -462,7 +462,7 @@ func TestEmployeeHandler_GetEmployee_NotFound(t *testing.T) {
 	db := openHandlerDB(t, "grpc_get_nf")
 	cfg := &config.Config{JWTSecret: "secret"}
 	svc := service.NewEmployeeService(cfg, db, nil)
-	h := NewEmployeeHandlerWithService(svc)
+	h := NewEmployeeHandlerWithService(svc, nil)
 
 	_, err := h.GetEmployee(context.Background(), &employeev1.GetEmployeeRequest{Id: 9999})
 
@@ -480,7 +480,7 @@ func TestEmployeeHandler_ListEmployees_Success(t *testing.T) {
 	createEmployee(t, db, "list1@bank.com", "list1-user")
 	createEmployee(t, db, "list2@bank.com", "list2-user")
 	svc := service.NewEmployeeService(cfg, db, nil)
-	h := NewEmployeeHandlerWithService(svc)
+	h := NewEmployeeHandlerWithService(svc, nil)
 
 	resp, err := h.ListEmployees(context.Background(), &employeev1.ListEmployeesRequest{
 		Page:     1,
@@ -504,7 +504,7 @@ func TestEmployeeHandler_UpdateEmployee_Success(t *testing.T) {
 	cfg := &config.Config{JWTSecret: "secret"}
 	emp := createEmployee(t, db, "update.emp@bank.com", "update-emp")
 	svc := service.NewEmployeeService(cfg, db, nil)
-	h := NewEmployeeHandlerWithService(svc)
+	h := NewEmployeeHandlerWithService(svc, nil)
 
 	resp, err := h.UpdateEmployee(context.Background(), &employeev1.UpdateEmployeeRequest{
 		Id:            uint64(emp.ID),
@@ -533,7 +533,7 @@ func TestEmployeeHandler_UpdateEmployee_NotFound_ReturnsInvalidArgument(t *testi
 	db := openHandlerDB(t, "grpc_update_nf")
 	cfg := &config.Config{JWTSecret: "secret"}
 	svc := service.NewEmployeeService(cfg, db, nil)
-	h := NewEmployeeHandlerWithService(svc)
+	h := NewEmployeeHandlerWithService(svc, nil)
 
 	_, err := h.UpdateEmployee(context.Background(), &employeev1.UpdateEmployeeRequest{
 		Id:  9999,
@@ -550,7 +550,7 @@ func TestEmployeeHandler_SetEmployeeActive_Success(t *testing.T) {
 	cfg := &config.Config{JWTSecret: "secret"}
 	emp := createEmployee(t, db, "active.emp@bank.com", "active-emp")
 	svc := service.NewEmployeeService(cfg, db, nil)
-	h := NewEmployeeHandlerWithService(svc)
+	h := NewEmployeeHandlerWithService(svc, nil)
 
 	resp, err := h.SetEmployeeActive(context.Background(), &employeev1.SetEmployeeActiveRequest{
 		Id:      uint64(emp.ID),
@@ -572,7 +572,7 @@ func TestEmployeeHandler_SetEmployeeActive_NotFound(t *testing.T) {
 	db := openHandlerDB(t, "grpc_active_nf")
 	cfg := &config.Config{JWTSecret: "secret"}
 	svc := service.NewEmployeeService(cfg, db, nil)
-	h := NewEmployeeHandlerWithService(svc)
+	h := NewEmployeeHandlerWithService(svc, nil)
 
 	_, err := h.SetEmployeeActive(context.Background(), &employeev1.SetEmployeeActiveRequest{
 		Id:      9999,
@@ -590,7 +590,7 @@ func TestEmployeeHandler_UpdateEmployeePermissions_Success(t *testing.T) {
 	// Seed the permission so UpdateEmployeePermissions can find it
 	emp := createEmployee(t, db, "perms.emp@bank.com", "perms-emp", models.PermEmployeeAgent)
 	svc := service.NewEmployeeService(cfg, db, nil)
-	h := NewEmployeeHandlerWithService(svc)
+	h := NewEmployeeHandlerWithService(svc, nil)
 
 	resp, err := h.UpdateEmployeePermissions(context.Background(), &employeev1.UpdateEmployeePermissionsRequest{
 		Id:              uint64(emp.ID),
@@ -609,7 +609,7 @@ func TestEmployeeHandler_UpdateEmployeePermissions_NotFound_ReturnsInvalidArgume
 	db := openHandlerDB(t, "grpc_perms_nf")
 	cfg := &config.Config{JWTSecret: "secret"}
 	svc := service.NewEmployeeService(cfg, db, nil)
-	h := NewEmployeeHandlerWithService(svc)
+	h := NewEmployeeHandlerWithService(svc, nil)
 
 	_, err := h.UpdateEmployeePermissions(context.Background(), &employeev1.UpdateEmployeePermissionsRequest{
 		Id:              9999,
@@ -635,7 +635,7 @@ func TestEmployeeHandler_GetAllPermissions_Success(t *testing.T) {
 	}
 
 	svc := service.NewEmployeeService(cfg, db, nil)
-	h := NewEmployeeHandlerWithService(svc)
+	h := NewEmployeeHandlerWithService(svc, nil)
 
 	resp, err := h.GetAllPermissions(context.Background(), &employeev1.GetAllPermissionsRequest{})
 
@@ -652,7 +652,7 @@ func TestEmployeeHandler_ToEmployeeProto_WithPermissions(t *testing.T) {
 	cfg := &config.Config{JWTSecret: "secret"}
 	emp := createEmployee(t, db, "proto.emp@bank.com", "proto-emp", models.PermEmployeeAgent)
 	svc := service.NewEmployeeService(cfg, db, nil)
-	h := NewEmployeeHandlerWithService(svc)
+	h := NewEmployeeHandlerWithService(svc, nil)
 
 	resp, err := h.GetEmployee(context.Background(), &employeev1.GetEmployeeRequest{Id: uint64(emp.ID)})
 	if err != nil {
@@ -669,7 +669,7 @@ func TestEmployeeHandler_ListEmployees_ToListItem(t *testing.T) {
 	cfg := &config.Config{JWTSecret: "secret"}
 	createEmployee(t, db, "item.emp@bank.com", "item-emp", models.PermEmployeeAgent)
 	svc := service.NewEmployeeService(cfg, db, nil)
-	h := NewEmployeeHandlerWithService(svc)
+	h := NewEmployeeHandlerWithService(svc, nil)
 
 	resp, err := h.ListEmployees(context.Background(), &employeev1.ListEmployeesRequest{Page: 1, PageSize: 10})
 	if err != nil {

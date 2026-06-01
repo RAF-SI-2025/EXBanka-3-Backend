@@ -251,7 +251,7 @@ func setupTaxHandler(t *testing.T, db *gorm.DB) *TaxHTTPHandler {
 	orderRepo := repository.NewOrderRepository(db)
 	taxSvc := service.NewTaxService(taxRepo, marketRepo, &fakeRates{})
 	collector := service.NewTaxCollector(taxSvc, orderRepo, taxRepo)
-	return NewTaxHTTPHandler(cfg, taxSvc, collector)
+	return NewTaxHTTPHandler(cfg, taxSvc, collector, nil)
 }
 
 func TestTaxHTTP_UnknownRoute_404(t *testing.T) {

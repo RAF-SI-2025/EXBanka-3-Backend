@@ -2,9 +2,11 @@ package handler
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	employeev1 "github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/gen/proto/employee/v1"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/auditlog"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/config"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/middleware"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/models"
@@ -19,14 +21,15 @@ import (
 type EmployeeHandler struct {
 	employeev1.UnimplementedEmployeeServiceServer
 	svc *svc.EmployeeService
+	db  *gorm.DB
 }
 
-func NewEmployeeHandlerWithService(svc *svc.EmployeeService) *EmployeeHandler {
-	return &EmployeeHandler{svc: svc}
+func NewEmployeeHandlerWithService(empSvc *svc.EmployeeService, db *gorm.DB) *EmployeeHandler {
+	return &EmployeeHandler{svc: empSvc, db: db}
 }
 
 func NewEmployeeHandler(cfg *config.Config, db *gorm.DB, notifSvc *svc.NotificationService) *EmployeeHandler {
-	return NewEmployeeHandlerWithService(svc.NewEmployeeService(cfg, db, notifSvc))
+	return NewEmployeeHandlerWithService(svc.NewEmployeeService(cfg, db, notifSvc), db)
 }
 
 func toEmployeeProto(emp *models.Employee) *employeev1.EmployeeProto {
@@ -171,10 +174,28 @@ func (h *EmployeeHandler) UpdateEmployeePermissions(ctx context.Context, req *em
 	if claims, ok := middleware.GetClaimsFromContext(ctx); ok && claims != nil {
 		actorID = claims.EmployeeID
 	}
+
+	// Read old permissions BEFORE update for audit log
+	oldPermsStr := ""
+	if before, err := h.svc.GetEmployee(uint(req.Id)); err == nil {
+		oldPermsStr = strings.Join(before.PermissionNames(), ",")
+	}
+
 	emp, err := h.svc.UpdateEmployeePermissionsBy(uint(req.Id), req.PermissionNames, actorID)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%s", err.Error())
 	}
+
+	// Record audit AFTER successful update
+	resID := uint(req.Id)
+	auditlog.Record(h.db, auditlog.AuditEntry{
+		Action:       auditlog.ActionEmployeePermissionsChanged,
+		ActorID:      actorID,
+		ResourceID:   &resID,
+		ResourceType: "employee",
+		OldValue:     oldPermsStr,
+		NewValue:     strings.Join(req.PermissionNames, ","),
+	})
 
 	perms := make([]*employeev1.PermissionProto, 0, len(emp.Permissions))
 	for _, p := range emp.Permissions {

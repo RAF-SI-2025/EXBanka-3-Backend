@@ -146,13 +146,13 @@ func main() {
 	marketH := handler.NewMarketHTTPHandler(cfg, marketSvc, marketRepo)
 
 	orderSvc := service.NewOrderService(orderRepo, marketRepo, rateProvider)
-	orderH := handler.NewOrderHTTPHandler(cfg, orderSvc).WithFundService(fundSvc)
+	orderH := handler.NewOrderHTTPHandler(cfg, orderSvc, db).WithFundService(fundSvc)
 	portfolioH := handler.NewPortfolioHTTPHandler(cfg, portfolioSvc)
 	otcSvc := service.NewOtcService(portfolioRepo, otcRepo).WithOrchestrator(sagaOrchestrator)
 	otcH := handler.NewOtcHTTPHandler(cfg, otcSvc).WithSagaQuerier(sagaRepo)
 
 	taxCollector := service.NewTaxCollector(taxSvc, orderRepo, taxRepo)
-	taxH := handler.NewTaxHTTPHandler(cfg, taxSvc, taxCollector)
+	taxH := handler.NewTaxHTTPHandler(cfg, taxSvc, taxCollector, db)
 
 	fundH := handler.NewFundHTTPHandler(cfg, fundSvc)
 

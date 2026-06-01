@@ -2,22 +2,26 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/auditlog"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/config"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/models"
 	svc "github.com/RAF-SI-2025/EXBanka-3-Backend/employee-service/internal/service"
+	"gorm.io/gorm"
 )
 
 type ActuaryHTTPHandler struct {
 	cfg *config.Config
 	svc *svc.EmployeeService
+	db  *gorm.DB
 }
 
-func NewActuaryHTTPHandler(cfg *config.Config, svc *svc.EmployeeService) *ActuaryHTTPHandler {
-	return &ActuaryHTTPHandler{cfg: cfg, svc: svc}
+func NewActuaryHTTPHandler(cfg *config.Config, svc *svc.EmployeeService, db *gorm.DB) *ActuaryHTTPHandler {
+	return &ActuaryHTTPHandler{cfg: cfg, svc: svc, db: db}
 }
 
 func (h *ActuaryHTTPHandler) ListActuaries(w http.ResponseWriter, r *http.Request) {
@@ -88,11 +92,13 @@ func (h *ActuaryHTTPHandler) ActuaryRoutes(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	actorID := uint(claims.EmployeeID)
+
 	switch {
 	case len(parts) == 2 && parts[1] == "limit" && (r.Method == http.MethodPut || r.Method == http.MethodPatch):
-		h.updateAgentLimit(w, r, uint(employeeID))
+		h.updateAgentLimit(w, r, uint(employeeID), actorID)
 	case len(parts) == 2 && parts[1] == "reset-used-limit" && r.Method == http.MethodPost:
-		h.resetAgentUsedLimit(w, uint(employeeID))
+		h.resetAgentUsedLimit(w, uint(employeeID), actorID)
 	case len(parts) == 2 && parts[1] == "need-approval" && (r.Method == http.MethodPut || r.Method == http.MethodPatch):
 		h.setNeedApproval(w, r, uint(employeeID))
 	default:
@@ -100,7 +106,7 @@ func (h *ActuaryHTTPHandler) ActuaryRoutes(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-func (h *ActuaryHTTPHandler) updateAgentLimit(w http.ResponseWriter, r *http.Request, employeeID uint) {
+func (h *ActuaryHTTPHandler) updateAgentLimit(w http.ResponseWriter, r *http.Request, employeeID uint, actorID uint) {
 	var body struct {
 		Limit *float64 `json:"limit"`
 	}
@@ -109,10 +115,27 @@ func (h *ActuaryHTTPHandler) updateAgentLimit(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Read old value BEFORE update
+	oldValue := "unknown"
+	if oldState, err := h.svc.GetActuaryState(employeeID); err == nil {
+		oldValue = formatLimit(oldState.Limit)
+	}
+
 	if err := h.svc.UpdateAgentLimit(employeeID, body.Limit); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 		return
 	}
+
+	// Record AFTER successful update
+	resID := employeeID
+	auditlog.Record(h.db, auditlog.AuditEntry{
+		Action:       auditlog.ActionAgentLimitChanged,
+		ActorID:      actorID,
+		ResourceID:   &resID,
+		ResourceType: "employee",
+		OldValue:     oldValue,
+		NewValue:     formatLimit(body.Limit),
+	})
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"message":    "limit updated",
@@ -121,11 +144,28 @@ func (h *ActuaryHTTPHandler) updateAgentLimit(w http.ResponseWriter, r *http.Req
 	})
 }
 
-func (h *ActuaryHTTPHandler) resetAgentUsedLimit(w http.ResponseWriter, employeeID uint) {
+func (h *ActuaryHTTPHandler) resetAgentUsedLimit(w http.ResponseWriter, employeeID uint, actorID uint) {
+	// Read old used limit BEFORE reset
+	oldValue := "unknown"
+	if oldState, err := h.svc.GetActuaryState(employeeID); err == nil {
+		oldValue = fmt.Sprintf("%.4f", oldState.UsedLimit)
+	}
+
 	if err := h.svc.ResetAgentUsedLimit(employeeID); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 		return
 	}
+
+	// Record AFTER successful reset
+	resID := employeeID
+	auditlog.Record(h.db, auditlog.AuditEntry{
+		Action:       auditlog.ActionAgentUsedLimitReset,
+		ActorID:      actorID,
+		ResourceID:   &resID,
+		ResourceType: "employee",
+		OldValue:     oldValue,
+		NewValue:     "0.0000",
+	})
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"message":    "used limit reset to 0",
@@ -152,6 +192,14 @@ func (h *ActuaryHTTPHandler) setNeedApproval(w http.ResponseWriter, r *http.Requ
 		"employeeId":   employeeID,
 		"needApproval": body.NeedApproval,
 	})
+}
+
+// formatLimit renders a *float64 limit as a human-readable string.
+func formatLimit(limit *float64) string {
+	if limit == nil {
+		return "unlimited"
+	}
+	return fmt.Sprintf("%.4f", *limit)
 }
 
 type actuaryManagementResponse struct {

@@ -89,7 +89,7 @@ func TestActuaryHTTPHandler_ListActuaries_AllowsSupervisorAndAdmin(t *testing.T)
 	admin := mustCreateEmployeeWithPermissions(t, db, "admin.market@bank.com", "admin-market", models.PermEmployeeAdmin)
 
 	svc := service.NewEmployeeService(cfg, db, nil)
-	handler := NewActuaryHTTPHandler(cfg, svc)
+	handler := NewActuaryHTTPHandler(cfg, svc, nil)
 
 	for _, testCase := range []struct {
 		name        string
@@ -138,7 +138,7 @@ func TestActuaryHTTPHandler_ListActuaries_RejectsNonSupervisorEmployee(t *testin
 
 	agent := mustCreateEmployeeWithPermissions(t, db, "agent.only@bank.com", "agent-only", models.PermEmployeeAgent)
 	svc := service.NewEmployeeService(cfg, db, nil)
-	handler := NewActuaryHTTPHandler(cfg, svc)
+	handler := NewActuaryHTTPHandler(cfg, svc, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/actuaries", nil)
 	req.Header.Set("Authorization", "Bearer "+mustEmployeeAccessToken(t, cfg, agent.ID, agent.Email, agent.Username, []string{models.PermEmployeeAgent}))
