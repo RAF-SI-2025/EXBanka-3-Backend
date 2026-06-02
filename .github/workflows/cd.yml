@@ -42,7 +42,12 @@ jobs:
           # shared upstream repo). GHCR namespaces must be lowercase.
           OWNER="${{ github.repository_owner }}"
           OWNER="${OWNER,,}"
-          TAG="ghcr.io/${OWNER}/exbanka-3-${{ matrix.service }}:latest"
+          IMAGE="ghcr.io/${OWNER}/exbanka-3-${{ matrix.service }}"
+          # Tag every build with the immutable 7-char commit SHA so deploys are
+          # traceable and rollback-able, and also move :latest to the same build
+          # so anything still pulling :latest keeps working.
+          SHA_TAG="${IMAGE}:${GITHUB_SHA::7}"
+          LATEST_TAG="${IMAGE}:latest"
           # Build context mirrors ci.yml: transfer/payment/exchange/loan build
           # from their own dir; auth/employee/client/account copy paths rooted at
           # EXBanka-3-Backend/ and need the repo's parent as context.
@@ -52,14 +57,15 @@ jobs:
               # repo root, not under a service subdir, but uses the same
               # root-relative COPY, so it needs the repo's parent as context.
               cd ..
-              docker build -f "EXBanka-3-Backend/Dockerfile" -t "$TAG" .
+              docker build -f "EXBanka-3-Backend/Dockerfile" -t "$SHA_TAG" -t "$LATEST_TAG" .
               ;;
             transfer-service|payment-service|exchange-service|loan-service)
-              docker build -f "${{ matrix.service }}/Dockerfile" -t "$TAG" "${{ matrix.service }}"
+              docker build -f "${{ matrix.service }}/Dockerfile" -t "$SHA_TAG" -t "$LATEST_TAG" "${{ matrix.service }}"
               ;;
             *)
               cd ..
-              docker build -f "EXBanka-3-Backend/${{ matrix.service }}/Dockerfile" -t "$TAG" .
+              docker build -f "EXBanka-3-Backend/${{ matrix.service }}/Dockerfile" -t "$SHA_TAG" -t "$LATEST_TAG" .
               ;;
           esac
-          docker push "$TAG"
+          docker push "$SHA_TAG"
+          docker push "$LATEST_TAG"
