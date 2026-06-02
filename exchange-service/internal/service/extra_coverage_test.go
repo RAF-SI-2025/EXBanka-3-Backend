@@ -49,7 +49,7 @@ func TestStartCronJobs_Constructs(t *testing.T) {
 	psvc := service.NewPortfolioService(portfolioRepo, taxSvc, marketRepo, orderRepo)
 	fundSvc := service.NewFundService(repository.NewFundRepository(db), portfolioRepo, marketRepo, orderRepo, rates)
 
-	c := service.StartCronJobs(db, psvc, rates, nil, fundSvc, nil, nil)
+	c := service.StartCronJobs(db, psvc, rates, nil, fundSvc, nil, nil, nil)
 	if c == nil {
 		t.Fatal("expected non-nil cron")
 	}

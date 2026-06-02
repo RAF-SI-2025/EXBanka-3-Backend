@@ -63,6 +63,7 @@ func Migrate(db *gorm.DB) error {
 			&models.InterbankPendingExercise{},
 			&models.Watchlist{},
 			&models.WatchlistItem{},
+			&models.PriceAlert{},
 		)
 	}); err != nil {
 		return fmt.Errorf("migration failed: %w", err)
