@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"log/slog"
 	"math"
 	"math/rand"
@@ -27,12 +28,13 @@ func StartCronJobs(
 	fundSvc *FundService,
 	interbankReconcile *InterbankReconcileRunner,
 	publicStockCache *PublicStockCacheRunner,
+	emailSvc EmailSender,
 ) *cron.Cron {
 	c := cron.New()
 
-	// Refresh listing prices every 15 minutes.
+	// Refresh listing prices every 15 minutes; check price alerts after each refresh.
 	_, err := c.AddFunc("@every 15m", func() {
-		refreshListingPrices(db)
+		refreshListingPrices(db, emailSvc)
 	})
 	if err != nil {
 		slog.Error("Failed to add price refresh cron job", "error", err)
@@ -163,7 +165,7 @@ func expireDueInterbankReservations(ibOtcRepo *repository.InterbankOtcRepository
 	}
 }
 
-func refreshListingPrices(db *gorm.DB) {
+func refreshListingPrices(db *gorm.DB, emailSvc EmailSender) {
 	slog.Info("Starting listing price refresh...")
 
 	var listings []models.MarketListingRecord
@@ -204,6 +206,9 @@ func refreshListingPrices(db *gorm.DB) {
 			continue
 		}
 
+		// Check price alerts AFTER the price has been successfully persisted.
+		CheckPriceAlerts(db, emailSvc, listing.Ticker, newPrice)
+
 		// Record daily price snapshot if new day
 		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 		var existing models.MarketListingDailyPriceInfoRecord
@@ -239,4 +244,52 @@ func refreshListingPrices(db *gorm.DB) {
 	}
 
 	slog.Info("Listing price refresh complete", "updated", updated)
+}
+
+// CheckPriceAlerts evaluates all active alerts for the given ticker against
+// newPrice. For each triggered alert it:
+//  1. Sends an email notification to the address stored at alert creation.
+//  2. Deactivates the alert (is_active = false) — only on successful email send.
+//
+// Exported so it can be called directly from tests without going through the
+// 15-minute cron schedule.
+func CheckPriceAlerts(db *gorm.DB, emailSvc EmailSender, ticker string, newPrice float64) {
+	alertRepo := repository.NewPriceAlertRepository(db)
+	alerts, err := alertRepo.GetActiveByTicker(ticker)
+	if err != nil {
+		slog.Error("CheckPriceAlerts: fetch failed", "ticker", ticker, "error", err)
+		return
+	}
+	for _, alert := range alerts {
+		triggered := false
+		switch alert.Condition {
+		case "ABOVE":
+			triggered = newPrice >= alert.Threshold // scenario 27: ABOVE fires at >=
+		case "BELOW":
+			triggered = newPrice <= alert.Threshold // scenario 27: BELOW fires at <=
+		}
+		if !triggered {
+			continue
+		}
+
+		subject := fmt.Sprintf("Price Alert: %s %s %.2f", alert.Ticker, alert.Condition, alert.Threshold)
+		body := fmt.Sprintf(
+			"Your price alert has been triggered.\n\nAsset: %s\nCondition: %s %.2f\nCurrent price: %.2f\n\nThis alert has been deactivated and will not fire again.",
+			alert.Ticker, alert.Condition, alert.Threshold, newPrice,
+		)
+		if err := emailSvc.Send(alert.NotificationEmail, subject, body); err != nil {
+			slog.Error("CheckPriceAlerts: email failed, alert NOT deactivated",
+				"alertID", alert.ID, "error", err)
+			continue // do not deactivate — retry on next tick
+		}
+
+		// Scenario 27: deactivate AFTER successful email so alert never fires again.
+		if err := alertRepo.Deactivate(alert.ID); err != nil {
+			slog.Error("CheckPriceAlerts: deactivate failed",
+				"alertID", alert.ID, "error", err)
+		} else {
+			slog.Info("Price alert triggered and deactivated",
+				"alertID", alert.ID, "ticker", ticker, "newPrice", newPrice)
+		}
+	}
 }

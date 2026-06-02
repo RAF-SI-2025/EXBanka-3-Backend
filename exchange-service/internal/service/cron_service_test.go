@@ -10,6 +10,11 @@ import (
 	"gorm.io/gorm"
 )
 
+// noopEmailSender satisfies EmailSender without dialing any SMTP server.
+type noopEmailSender struct{}
+
+func (noopEmailSender) Send(_, _, _ string) error { return nil }
+
 func openCronTestDB(t *testing.T, name string) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", name)), &gorm.Config{})
@@ -49,7 +54,7 @@ func TestRefreshListingPrices_UpdatesNonOptionListings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	refreshListingPrices(db)
+	refreshListingPrices(db, noopEmailSender{})
 
 	// Stock should have a daily price record.
 	var stockHistory []models.MarketListingDailyPriceInfoRecord
@@ -68,7 +73,7 @@ func TestRefreshListingPrices_UpdatesNonOptionListings(t *testing.T) {
 	}
 
 	// Calling a second time should update (not duplicate) the existing day's row.
-	refreshListingPrices(db)
+	refreshListingPrices(db, noopEmailSender{})
 	var afterSecond []models.MarketListingDailyPriceInfoRecord
 	db.Where("listing_id = ?", stock.ID).Find(&afterSecond)
 	if len(afterSecond) != 1 {
