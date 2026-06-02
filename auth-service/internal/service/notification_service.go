@@ -8,9 +8,19 @@ import (
 	"gopkg.in/gomail.v2"
 )
 
+// NotificationServiceInterface allows mocking in tests.
+type NotificationServiceInterface interface {
+	SendConfirmationEmail(toEmail, toName string) error
+	SendResetPasswordEmail(toEmail, toName, token string) error
+	SendAccountLockedEmail(toEmail, toName string) error
+}
+
 type NotificationService struct {
 	cfg *config.Config
 }
+
+// Compile-time check.
+var _ NotificationServiceInterface = (*NotificationService)(nil)
 
 func NewNotificationService(cfg *config.Config) *NotificationService {
 	return &NotificationService{cfg: cfg}
@@ -43,6 +53,24 @@ func (s *NotificationService) SendConfirmationEmail(toEmail, toName string) erro
 `, toName)
 
 	return s.sendEmail(toEmail, "Your Account Is Now Active", body)
+}
+
+func (s *NotificationService) SendAccountLockedEmail(toEmail, toName string) error {
+	link := fmt.Sprintf("%s/forgot-password", s.cfg.FrontendURL)
+
+	body := fmt.Sprintf(`
+<!DOCTYPE html><html><body>
+<h2>Account Temporarily Locked</h2>
+<p>Hello, %s!</p>
+<p>Your account has been <strong>temporarily locked</strong> due to 5 consecutive failed login attempts.</p>
+<p>The lock will be lifted automatically after <strong>10 minutes</strong>.</p>
+<p>If you have forgotten your password, you can reset it using the link below:</p>
+<p><a href="%s" style="background:#dc3545;color:#fff;padding:10px 20px;text-decoration:none;border-radius:4px;">Reset Password</a></p>
+<p>If you did not attempt to log in, please contact support immediately.</p>
+</body></html>
+`, toName, link)
+
+	return s.sendEmail(toEmail, "Account Temporarily Locked", body)
 }
 
 func (s *NotificationService) sendEmail(to, subject, htmlBody string) error {

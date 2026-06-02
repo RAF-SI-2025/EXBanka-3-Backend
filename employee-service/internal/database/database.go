@@ -38,6 +38,7 @@ func Migrate(db *gorm.DB) error {
 			&models.ActuaryProfile{},
 			&models.Permission{},
 			&models.Token{},
+			&models.AuditLog{},
 		); err != nil {
 			return err
 		}

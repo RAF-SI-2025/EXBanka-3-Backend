@@ -32,6 +32,11 @@ type Config struct {
 	// at startup via interbank.NewRegistryFromJSON.
 	OwnRoutingNumber int
 	PartnerBanksJSON string
+
+	// SMTP — same env vars as account-service; targets Mailhog (host mailhog, port 1025)
+	SMTPHost string
+	SMTPPort int
+	SMTPFrom string
 }
 
 func Load() *Config {
@@ -41,6 +46,8 @@ func Load() *Config {
 		slog.Error("JWT_SECRET is required and must not be empty", "service", "exchange-service")
 		os.Exit(1)
 	}
+
+	smtpPort, _ := strconv.Atoi(getEnv("SMTP_PORT", "1025"))
 
 	cfg := &Config{
 		DBHost:             getEnv("DB_HOST", "localhost"),
@@ -58,6 +65,9 @@ func Load() *Config {
 		RedisDB:            getEnvInt("REDIS_DB", 0),
 		OwnRoutingNumber:   getEnvInt("BANK_ROUTING_NUMBER", 333),
 		PartnerBanksJSON:   getEnv("PARTNER_BANKS_JSON", "[]"),
+		SMTPHost:           getEnv("SMTP_HOST", "mailhog"),
+		SMTPPort:           smtpPort,
+		SMTPFrom:           getEnv("SMTP_FROM", "noreply@bank.com"),
 	}
 
 	slog.Info("Exchange-service config loaded",

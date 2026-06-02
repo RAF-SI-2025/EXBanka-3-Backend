@@ -2,15 +2,18 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/auditlog"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/config"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/service"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/util"
+	"gorm.io/gorm"
 )
 
 // TaxHTTPHandler exposes manual tax-collection trigger and record query endpoints.
@@ -18,10 +21,11 @@ type TaxHTTPHandler struct {
 	cfg       *config.Config
 	taxSvc    *service.TaxService
 	collector *service.TaxCollector
+	db        *gorm.DB
 }
 
-func NewTaxHTTPHandler(cfg *config.Config, taxSvc *service.TaxService, collector *service.TaxCollector) *TaxHTTPHandler {
-	return &TaxHTTPHandler{cfg: cfg, taxSvc: taxSvc, collector: collector}
+func NewTaxHTTPHandler(cfg *config.Config, taxSvc *service.TaxService, collector *service.TaxCollector, db *gorm.DB) *TaxHTTPHandler {
+	return &TaxHTTPHandler{cfg: cfg, taxSvc: taxSvc, collector: collector, db: db}
 }
 
 // TaxRoutes handles paths under /api/v1/tax/.
@@ -67,6 +71,15 @@ func (h *TaxHTTPHandler) triggerCollection(w http.ResponseWriter, r *http.Reques
 	}
 
 	result := h.collector.CollectForPeriod(period)
+
+	auditlog.Record(h.db, auditlog.AuditEntry{
+		Action:   auditlog.ActionTaxCollectionTriggered,
+		ActorID:  uint(claims.EmployeeID),
+		OldValue: "",
+		NewValue: fmt.Sprintf("period=%s users_processed=%d total_collected=%.4f",
+			result.Period, result.UsersProcessed, result.TotalCollected),
+	})
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"period":          result.Period,
 		"users_processed": result.UsersProcessed,

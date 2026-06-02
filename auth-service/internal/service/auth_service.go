@@ -20,10 +20,10 @@ type AuthService struct {
 	employeeRepo repository.EmployeeRepositoryInterface
 	clientRepo   repository.ClientRepositoryInterface
 	tokenRepo    repository.TokenRepositoryInterface
-	notifSvc     *NotificationService
+	notifSvc     NotificationServiceInterface
 }
 
-func NewAuthService(cfg *config.Config, db *gorm.DB, notifSvc *NotificationService) *AuthService {
+func NewAuthService(cfg *config.Config, db *gorm.DB, notifSvc NotificationServiceInterface) *AuthService {
 	return &AuthService{
 		cfg:          cfg,
 		employeeRepo: repository.NewEmployeeRepository(db),
@@ -35,7 +35,7 @@ func NewAuthService(cfg *config.Config, db *gorm.DB, notifSvc *NotificationServi
 
 // NewAuthServiceWithRepos constructs an AuthService with injected repository interfaces,
 // allowing mock implementations to be used in unit tests.
-func NewAuthServiceWithRepos(cfg *config.Config, employeeRepo repository.EmployeeRepositoryInterface, clientRepo repository.ClientRepositoryInterface, tokenRepo repository.TokenRepositoryInterface, notifSvc *NotificationService) *AuthService {
+func NewAuthServiceWithRepos(cfg *config.Config, employeeRepo repository.EmployeeRepositoryInterface, clientRepo repository.ClientRepositoryInterface, tokenRepo repository.TokenRepositoryInterface, notifSvc NotificationServiceInterface) *AuthService {
 	return &AuthService{
 		cfg:          cfg,
 		employeeRepo: employeeRepo,
@@ -66,13 +66,49 @@ func (s *AuthService) Login(email, password string) (string, string, *models.Emp
 		return "", "", nil, fmt.Errorf("account is not active")
 	}
 
+	// Brute-force check — must happen BEFORE password verification.
+	now := time.Now()
+	if emp.AccountLockedUntil != nil {
+		if emp.AccountLockedUntil.After(now) {
+			// Lock is still active: reject immediately, do NOT touch the counter.
+			return "", "", nil, fmt.Errorf("account temporarily locked, please try again later or reset your password")
+		}
+		// Lock has expired: reset state so the user gets fresh attempts.
+		_ = s.employeeRepo.UpdateFields(emp.ID, map[string]interface{}{
+			"failed_login_attempts": 0,
+			"account_locked_until":  nil,
+		})
+		emp.FailedLoginAttempts = 0
+		emp.AccountLockedUntil = nil
+	}
+
 	ok, err := util.VerifyPassword(password, emp.SaltPassword, emp.Password)
 	if err != nil {
 		return "", "", nil, err
 	}
 	if !ok {
+		emp.FailedLoginAttempts++
+		updates := map[string]interface{}{
+			"failed_login_attempts": emp.FailedLoginAttempts,
+		}
+		if emp.FailedLoginAttempts >= 5 {
+			lockUntil := now.Add(10 * time.Minute)
+			updates["account_locked_until"] = lockUntil
+			_ = s.employeeRepo.UpdateFields(emp.ID, updates)
+			if s.notifSvc != nil {
+				_ = s.notifSvc.SendAccountLockedEmail(emp.Email, emp.Ime+" "+emp.Prezime)
+			}
+		} else {
+			_ = s.employeeRepo.UpdateFields(emp.ID, updates)
+		}
 		return "", "", nil, fmt.Errorf("invalid credentials")
 	}
+
+	// Success — clear brute-force state.
+	_ = s.employeeRepo.UpdateFields(emp.ID, map[string]interface{}{
+		"failed_login_attempts": 0,
+		"account_locked_until":  nil,
+	})
 
 	perms := emp.PermissionNames()
 
@@ -213,13 +249,49 @@ func (s *AuthService) ClientLogin(email, password string) (string, string, *mode
 		return "", "", nil, fmt.Errorf("account is not active")
 	}
 
+	// Brute-force check — must happen BEFORE password verification.
+	now := time.Now()
+	if client.AccountLockedUntil != nil {
+		if client.AccountLockedUntil.After(now) {
+			// Lock is still active: reject immediately, do NOT touch the counter.
+			return "", "", nil, fmt.Errorf("account temporarily locked, please try again later or reset your password")
+		}
+		// Lock has expired: reset state so the user gets fresh attempts.
+		_ = s.clientRepo.UpdateFields(client.ID, map[string]interface{}{
+			"failed_login_attempts": 0,
+			"account_locked_until":  nil,
+		})
+		client.FailedLoginAttempts = 0
+		client.AccountLockedUntil = nil
+	}
+
 	ok, err := util.VerifyPassword(password, client.SaltPassword, client.Password)
 	if err != nil {
 		return "", "", nil, err
 	}
 	if !ok {
+		client.FailedLoginAttempts++
+		updates := map[string]interface{}{
+			"failed_login_attempts": client.FailedLoginAttempts,
+		}
+		if client.FailedLoginAttempts >= 5 {
+			lockUntil := now.Add(10 * time.Minute)
+			updates["account_locked_until"] = lockUntil
+			_ = s.clientRepo.UpdateFields(client.ID, updates)
+			if s.notifSvc != nil {
+				_ = s.notifSvc.SendAccountLockedEmail(client.Email, client.Ime+" "+client.Prezime)
+			}
+		} else {
+			_ = s.clientRepo.UpdateFields(client.ID, updates)
+		}
 		return "", "", nil, fmt.Errorf("invalid credentials")
 	}
+
+	// Success — clear brute-force state.
+	_ = s.clientRepo.UpdateFields(client.ID, map[string]interface{}{
+		"failed_login_attempts": 0,
+		"account_locked_until":  nil,
+	})
 
 	perms := client.PermissionNames()
 
@@ -314,7 +386,9 @@ func (s *AuthService) ResetPassword(tokenStr, password, passwordConfirm string) 
 	}
 
 	return s.employeeRepo.UpdateFields(token.EmployeeID, map[string]interface{}{
-		"password":      hashed,
-		"salt_password": salt,
+		"password":              hashed,
+		"salt_password":         salt,
+		"failed_login_attempts": 0,
+		"account_locked_until":  nil,
 	})
 }

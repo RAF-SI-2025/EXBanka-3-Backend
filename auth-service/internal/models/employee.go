@@ -20,8 +20,10 @@ type Employee struct {
 	SaltPassword  string         `gorm:"not null;column:salt_password" json:"-"`
 	Pozicija      string         `json:"pozicija"`
 	Departman     string         `json:"departman"`
-	Aktivan       bool           `gorm:"default:true" json:"aktivan"`
-	Permissions   []Permission   `gorm:"many2many:employee_permissions;" json:"permissions,omitempty"`
+	Aktivan              bool           `gorm:"default:true" json:"aktivan"`
+	FailedLoginAttempts  int            `gorm:"not null;default:0" json:"-"`
+	AccountLockedUntil   *time.Time     `json:"-"`
+	Permissions          []Permission   `gorm:"many2many:employee_permissions;" json:"permissions,omitempty"`
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
 	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`

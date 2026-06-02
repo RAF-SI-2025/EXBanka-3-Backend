@@ -2,25 +2,29 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/auditlog"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/config"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/service"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/util"
+	"gorm.io/gorm"
 )
 
 type OrderHTTPHandler struct {
 	cfg     *config.Config
 	svc     *service.OrderService
 	fundSvc *service.FundService
+	db      *gorm.DB
 }
 
-func NewOrderHTTPHandler(cfg *config.Config, svc *service.OrderService) *OrderHTTPHandler {
-	return &OrderHTTPHandler{cfg: cfg, svc: svc}
+func NewOrderHTTPHandler(cfg *config.Config, svc *service.OrderService, db *gorm.DB) *OrderHTTPHandler {
+	return &OrderHTTPHandler{cfg: cfg, svc: svc, db: db}
 }
 
 // WithFundService wires the optional fund service used to validate
@@ -252,6 +256,16 @@ func (h *OrderHTTPHandler) approveOrder(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	resID := orderID
+	auditlog.Record(h.db, auditlog.AuditEntry{
+		Action:       auditlog.ActionOrderApproved,
+		ActorID:      uint(claims.EmployeeID),
+		ResourceID:   &resID,
+		ResourceType: "order",
+		OldValue:     "pending",
+		NewValue:     fmt.Sprintf("approved_by=%d", claims.EmployeeID),
+	})
+
 	writeJSON(w, http.StatusOK, map[string]string{"message": "order approved"})
 }
 
@@ -268,6 +282,16 @@ func (h *OrderHTTPHandler) declineOrder(w http.ResponseWriter, r *http.Request, 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 		return
 	}
+
+	resID := orderID
+	auditlog.Record(h.db, auditlog.AuditEntry{
+		Action:       auditlog.ActionOrderDeclined,
+		ActorID:      uint(claims.EmployeeID),
+		ResourceID:   &resID,
+		ResourceType: "order",
+		OldValue:     "pending",
+		NewValue:     fmt.Sprintf("declined_by=%d", claims.EmployeeID),
+	})
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "order declined"})
 }

@@ -201,7 +201,7 @@ func setupTaxHandlerExtras(t *testing.T) *TaxHTTPHandler {
 	orderRepo := repository.NewOrderRepository(db)
 	taxSvc := service.NewTaxService(taxRepo, marketRepo, rates)
 	collector := service.NewTaxCollector(taxSvc, orderRepo, taxRepo)
-	return NewTaxHTTPHandler(cfg, taxSvc, collector)
+	return NewTaxHTTPHandler(cfg, taxSvc, collector, nil)
 }
 
 func TestTaxHTTP_Routes_Unauthorized(t *testing.T) {
@@ -353,7 +353,7 @@ func setupOrderHandlerNew(t *testing.T) *OrderHTTPHandler {
 	portSvc := service.NewPortfolioService(portRepo, taxSvc, marketRepo, orderRepo)
 	_ = portSvc
 	orderSvc := service.NewOrderService(orderRepo, marketRepo, rates)
-	return NewOrderHTTPHandler(cfg, orderSvc)
+	return NewOrderHTTPHandler(cfg, orderSvc, nil)
 }
 
 func TestOrderHTTP_CreateOrder_BadBody(t *testing.T) {

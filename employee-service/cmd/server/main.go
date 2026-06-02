@@ -55,8 +55,9 @@ func main() {
 
 	notifSvc := infrasvc.NewNotificationService(cfg)
 	employeeSvc := infrasvc.NewEmployeeService(cfg, db, notifSvc)
-	employeeH := handler.NewEmployeeHandlerWithService(employeeSvc)
-	actuaryHTTPHandler := handler.NewActuaryHTTPHandler(cfg, employeeSvc)
+	employeeH := handler.NewEmployeeHandlerWithService(employeeSvc, db)
+	actuaryHTTPHandler := handler.NewActuaryHTTPHandler(cfg, employeeSvc, db)
+	auditHTTPHandler := handler.NewAuditHTTPHandler(cfg, db)
 
 	cronScheduler := infrasvc.StartCronJobs(employeeSvc)
 	defer cronScheduler.Stop()
@@ -100,6 +101,7 @@ func main() {
 	httpMux.HandleFunc("/ready", readinessCheck(sqlDB))
 	httpMux.Handle("/api/v1/actuaries", middleware.CORS(http.HandlerFunc(actuaryHTTPHandler.ListActuaries)))
 	httpMux.Handle("/api/v1/actuaries/", middleware.CORS(http.HandlerFunc(actuaryHTTPHandler.ActuaryRoutes)))
+	httpMux.Handle("/api/v1/audit-logs", middleware.CORS(http.HandlerFunc(auditHTTPHandler.ListAuditLogs)))
 	httpMux.Handle("/", middleware.CORS(gwMux))
 
 	httpServer := &http.Server{

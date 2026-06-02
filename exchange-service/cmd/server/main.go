@@ -129,7 +129,8 @@ func main() {
 	ibPublicStockRepo := repository.NewRemotePublicStockRepository(db)
 	ibPublicStockCache := service.NewPublicStockCacheRunner(ibRegistry, ibClient, ibPublicStockRepo)
 
-	cronScheduler := service.StartCronJobs(db, portfolioSvc, rateProvider, sagaRetryRunner, fundSvc, ibReconcile, ibPublicStockCache)
+	emailSvc := service.NewSMTPEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPFrom)
+	cronScheduler := service.StartCronJobs(db, portfolioSvc, rateProvider, sagaRetryRunner, fundSvc, ibReconcile, ibPublicStockCache, emailSvc)
 
 	go func() {
 		slog.Info("Running market data seed in background...")
@@ -146,13 +147,19 @@ func main() {
 	marketH := handler.NewMarketHTTPHandler(cfg, marketSvc, marketRepo)
 
 	orderSvc := service.NewOrderService(orderRepo, marketRepo, rateProvider)
-	orderH := handler.NewOrderHTTPHandler(cfg, orderSvc).WithFundService(fundSvc)
+	orderH := handler.NewOrderHTTPHandler(cfg, orderSvc, db).WithFundService(fundSvc)
 	portfolioH := handler.NewPortfolioHTTPHandler(cfg, portfolioSvc)
 	otcSvc := service.NewOtcService(portfolioRepo, otcRepo).WithOrchestrator(sagaOrchestrator)
 	otcH := handler.NewOtcHTTPHandler(cfg, otcSvc).WithSagaQuerier(sagaRepo)
 
 	taxCollector := service.NewTaxCollector(taxSvc, orderRepo, taxRepo)
-	taxH := handler.NewTaxHTTPHandler(cfg, taxSvc, taxCollector)
+	taxH := handler.NewTaxHTTPHandler(cfg, taxSvc, taxCollector, db)
+
+	watchlistRepo := repository.NewWatchlistRepository(db)
+	watchlistH := handler.NewWatchlistHTTPHandler(cfg, watchlistRepo)
+
+	alertRepo := repository.NewPriceAlertRepository(db)
+	alertH := handler.NewPriceAlertHTTPHandler(cfg, alertRepo)
 
 	fundH := handler.NewFundHTTPHandler(cfg, fundSvc)
 
@@ -209,6 +216,10 @@ func main() {
 	httpMux.Handle("/api/v1/orders", middleware.CORS(http.HandlerFunc(orderH.OrdersCollection)))
 	httpMux.Handle("/api/v1/orders/", middleware.CORS(http.HandlerFunc(orderH.OrderRoutes)))
 	httpMux.Handle("/api/v1/tax/", middleware.CORS(http.HandlerFunc(taxH.TaxRoutes)))
+	httpMux.Handle("/api/v1/watchlists", middleware.CORS(http.HandlerFunc(watchlistH.WatchlistsCollection)))
+	httpMux.Handle("/api/v1/watchlists/", middleware.CORS(http.HandlerFunc(watchlistH.WatchlistRoutes)))
+	httpMux.Handle("/api/v1/price-alerts", middleware.CORS(http.HandlerFunc(alertH.Collection)))
+	httpMux.Handle("/api/v1/price-alerts/", middleware.CORS(http.HandlerFunc(alertH.Routes)))
 	httpMux.Handle("/api/v1/funds", middleware.CORS(http.HandlerFunc(fundH.FundRoutes)))
 	httpMux.Handle("/api/v1/funds/", middleware.CORS(http.HandlerFunc(fundH.FundRoutes)))
 	httpMux.Handle("/api/v1/interbank-otc/", middleware.CORS(http.HandlerFunc(ibOtcLocalH.Routes)))
