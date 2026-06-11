@@ -44,6 +44,18 @@ func (r *SagaRepository) AppendStep(sagaID uint, stepNumber int, name string) (*
 	return step, nil
 }
 
+// AppendAttempt adds one entry to the saga's append-only log (files/SAGA.md).
+// Phase is "F1".."F5" or "C1".."C5"; outcome is models.SagaAttemptOutcome*.
+func (r *SagaRepository) AppendAttempt(sagaID uint, phase, outcome, errMsg string) error {
+	return r.db.Create(&models.SagaAttemptRecord{
+		SagaID:    sagaID,
+		Phase:     phase,
+		Outcome:   outcome,
+		Error:     errMsg,
+		CreatedAt: time.Now().UTC(),
+	}).Error
+}
+
 func (r *SagaRepository) UpdateStep(stepID uint, fields map[string]interface{}) error {
 	fields["updated_at"] = time.Now().UTC()
 	return r.db.Model(&models.SagaStepRecord{}).Where("id = ?", stepID).Updates(fields).Error
@@ -107,9 +119,14 @@ func (r *SagaRepository) IncrementRetry(sagaID uint) error {
 
 func (r *SagaRepository) GetTransaction(sagaID uint) (*models.SagaTransactionRecord, error) {
 	var saga models.SagaTransactionRecord
-	if err := r.db.Preload("Steps", func(tx *gorm.DB) *gorm.DB {
-		return tx.Order("step_number ASC, id ASC")
-	}).First(&saga, sagaID).Error; err != nil {
+	if err := r.db.
+		Preload("Steps", func(tx *gorm.DB) *gorm.DB {
+			return tx.Order("step_number ASC, id ASC")
+		}).
+		Preload("Attempts", func(tx *gorm.DB) *gorm.DB {
+			return tx.Order("id ASC")
+		}).
+		First(&saga, sagaID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}

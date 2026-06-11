@@ -393,7 +393,11 @@ func (h *OtcHTTPHandler) exerciseContract(w http.ResponseWriter, r *http.Request
 	}
 
 	buyerID, buyerType := callerIdentity(claims)
-	result, err := h.svc.ExerciseContract(contractID, buyerID, buyerType)
+	var faults *service.SagaFaultConfig
+	if h.cfg != nil && h.cfg.SagaFaultHooks {
+		faults = parseSagaFaultConfig(r.Header)
+	}
+	result, err := h.svc.ExerciseContractWithFaults(contractID, buyerID, buyerType, faults)
 	if err != nil {
 		if errors.Is(err, service.ErrOtcContractNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"message": "contract not found"})
@@ -685,6 +689,80 @@ func (e *badRequestError) Error() string {
 	return e.message
 }
 
+// parseSagaFaultConfig builds a fault-injection config from X-Saga-* request
+// headers. It is only ever called when SAGA_FAULT_HOOKS is enabled (test
+// builds); see files/SAGA.md. Returns nil when no fault headers are present.
+func parseSagaFaultConfig(hdr http.Header) *service.SagaFaultConfig {
+	fc := &service.SagaFaultConfig{}
+	set := false
+	if s := sagaStepNumber(hdr.Get("X-Saga-Force-Fail")); s > 0 {
+		fc.ForceFailStep = s
+		set = true
+	}
+	if strings.EqualFold(strings.TrimSpace(hdr.Get("X-Saga-Force-Fail-Kind")), "after") {
+		fc.ForceFailAfter = true
+	}
+	if s := sagaStepNumber(hdr.Get("X-Saga-Compensate-Fail")); s > 0 {
+		fc.CompensateFailStep = s
+		fc.CompensateFailTimes = 1 // default: fail once unless -Times overrides
+		set = true
+	}
+	if n, err := strconv.Atoi(strings.TrimSpace(hdr.Get("X-Saga-Compensate-Fail-Times"))); err == nil && n >= 0 {
+		fc.CompensateFailTimes = n
+	}
+	if delays := sagaInjectDelays(hdr.Get("X-Saga-Inject-Delay")); len(delays) > 0 {
+		fc.InjectDelays = delays
+		set = true
+	}
+	if !set {
+		return nil
+	}
+	return fc
+}
+
+// sagaStepNumber maps an "F3"/"C2" tag to its 1-based step number (3, 2),
+// returning 0 for anything it can't parse.
+func sagaStepNumber(tag string) int {
+	tag = strings.TrimSpace(tag)
+	if len(tag) < 2 {
+		return 0
+	}
+	switch tag[0] {
+	case 'F', 'f', 'C', 'c':
+		n, err := strconv.Atoi(tag[1:])
+		if err != nil || n < 1 {
+			return 0
+		}
+		return n
+	}
+	return 0
+}
+
+// sagaInjectDelays parses "F3:5000" (optionally comma-separated, optional "ms"
+// suffix) into a step-number -> delay map. Values are milliseconds.
+func sagaInjectDelays(raw string) map[int]time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	out := make(map[int]time.Duration)
+	for _, part := range strings.Split(raw, ",") {
+		kv := strings.SplitN(strings.TrimSpace(part), ":", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		step := sagaStepNumber(kv[0])
+		ms, err := strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(kv[1]), "ms"))
+		if step > 0 && err == nil && ms >= 0 {
+			out[step] = time.Duration(ms) * time.Millisecond
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 type sagaStepResponse struct {
 	StepNumber   int    `json:"stepNumber"`
 	Name         string `json:"name"`
@@ -693,16 +771,25 @@ type sagaStepResponse struct {
 	ErrorMessage string `json:"errorMessage,omitempty"`
 }
 
+// sagaLogEntryResponse is one entry of the append-only saga log (files/SAGA.md):
+// a forward or compensation attempt and its outcome, in execution order.
+type sagaLogEntryResponse struct {
+	Phase   string `json:"phase"`   // "F1".."F5" or "C1".."C5"
+	Outcome string `json:"outcome"` // "ok" | "err"
+	Error   string `json:"error,omitempty"`
+}
+
 type sagaTransactionResponse struct {
-	ID          uint               `json:"id"`
-	Type        string             `json:"type"`
-	Status      string             `json:"status"`
-	CurrentStep int                `json:"currentStep"`
-	RetryCount  int                `json:"retryCount"`
-	Error       string             `json:"error,omitempty"`
-	CreatedAt   string             `json:"createdAt"`
-	UpdatedAt   string             `json:"updatedAt"`
-	Steps       []sagaStepResponse `json:"steps"`
+	ID          uint                   `json:"id"`
+	Type        string                 `json:"type"`
+	Status      string                 `json:"status"`
+	CurrentStep int                    `json:"currentStep"`
+	RetryCount  int                    `json:"retryCount"`
+	Error       string                 `json:"error,omitempty"`
+	CreatedAt   string                 `json:"createdAt"`
+	UpdatedAt   string                 `json:"updatedAt"`
+	Steps       []sagaStepResponse     `json:"steps"`
+	Log         []sagaLogEntryResponse `json:"log"`
 }
 
 func sagaTransactionToResponse(saga models.SagaTransactionRecord) sagaTransactionResponse {
@@ -720,6 +807,14 @@ func sagaTransactionToResponse(saga models.SagaTransactionRecord) sagaTransactio
 			ErrorMessage: step.ErrorMessage,
 		})
 	}
+	logEntries := make([]sagaLogEntryResponse, 0, len(saga.Attempts))
+	for _, a := range saga.Attempts {
+		logEntries = append(logEntries, sagaLogEntryResponse{
+			Phase:   a.Phase,
+			Outcome: a.Outcome,
+			Error:   a.Error,
+		})
+	}
 	return sagaTransactionResponse{
 		ID:          saga.ID,
 		Type:        saga.Type,
@@ -730,5 +825,6 @@ func sagaTransactionToResponse(saga models.SagaTransactionRecord) sagaTransactio
 		CreatedAt:   saga.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:   saga.UpdatedAt.UTC().Format(time.RFC3339),
 		Steps:       steps,
+		Log:         logEntries,
 	}
 }

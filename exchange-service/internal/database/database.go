@@ -50,6 +50,7 @@ func Migrate(db *gorm.DB) error {
 			&models.TaxRecord{},
 			&models.SagaTransactionRecord{},
 			&models.SagaStepRecord{},
+			&models.SagaAttemptRecord{},
 			&models.InvestmentFundRecord{},
 			&models.ClientFundTransactionRecord{},
 			&models.ClientFundPositionRecord{},

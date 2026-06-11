@@ -323,6 +323,13 @@ type ExerciseContractResult struct {
 // not-yet-expired OTC contract and runs the 5-step exercise saga. Returns the
 // saga ID so the caller can poll progress.
 func (s *OtcService) ExerciseContract(contractID, buyerID uint, buyerType string) (*ExerciseContractResult, error) {
+	return s.ExerciseContractWithFaults(contractID, buyerID, buyerType, nil)
+}
+
+// ExerciseContractWithFaults is ExerciseContract with an optional fault-injection
+// config threaded into the saga orchestrator. faults is nil in production; it is
+// only non-nil in the SAGA test suite (SAGA_FAULT_HOOKS, see files/SAGA.md).
+func (s *OtcService) ExerciseContractWithFaults(contractID, buyerID uint, buyerType string, faults *SagaFaultConfig) (*ExerciseContractResult, error) {
 	if s.orchestrator == nil {
 		return nil, fmt.Errorf("saga orchestrator is not configured")
 	}
@@ -358,7 +365,7 @@ func (s *OtcService) ExerciseContract(contractID, buyerID uint, buyerType string
 	}
 
 	steps := BuildOtcExerciseSteps(contract)
-	sagaID, runErr := s.orchestrator.Run(models.SagaTypeOtcExercise, payload, steps)
+	sagaID, runErr := s.orchestrator.RunWithFaults(models.SagaTypeOtcExercise, payload, steps, faults)
 	if runErr != nil {
 		return &ExerciseContractResult{SagaID: sagaID, Contract: contract}, runErr
 	}
