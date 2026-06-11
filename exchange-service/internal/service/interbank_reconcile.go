@@ -150,21 +150,34 @@ func (r *InterbankReconcileRunner) runAcceptCommits(ctx context.Context, thresho
 }
 
 func (r *InterbankReconcileRunner) reconcileAcceptCommit(ctx context.Context, neg *models.InterbankOtcNegotiation) {
-	buyerCode := interbank.RoutingNumber(neg.BuyerRoutingNumber)
+	// COMMIT_TX goes to the OTHER bank. CounterpartyRoutingNumber is "the
+	// other bank" for both seller- and buyer-coordinated accepts (and
+	// equals BuyerRoutingNumber on seller-role rows, so this is
+	// behaviour-preserving for the pre-existing seller path).
+	counterpartyCode := interbank.RoutingNumber(neg.CounterpartyRoutingNumber)
 	txID := interbank.ForeignBankId{
 		RoutingNumber: interbank.RoutingNumber(neg.AcceptTxRoutingNumber),
 		ID:            neg.AcceptTxID,
 	}
 	key := r.client.NewIdempotenceKey()
-	if err := r.client.SendCommitTx(ctx, buyerCode, key, txID); err != nil {
+	if err := r.client.SendCommitTx(ctx, counterpartyCode, key, txID); err != nil {
 		slog.Info("interbank reconcile: accept COMMIT_TX resend transient failure",
 			"err", err, "negotiation", neg.NegotiationID, "tx_id", neg.AcceptTxID)
 		r.bumpNegotiationUpdatedAt(neg)
 		return
 	}
-	if err := interbank.FinaliseAcceptCommit(r.db, r.otcWalletRepo, r.negRepo, neg); err != nil {
-		slog.Error("interbank reconcile: seller credit / finalise failed after accept COMMIT_TX resend",
-			"err", err, "negotiation", neg.NegotiationID, "tx_id", neg.AcceptTxID)
+	// Apply OUR side's local effect, branching on the role we coordinated
+	// as: seller credit, or buyer debit + option-contract creation. Both
+	// are CAS-guarded so this is safe alongside the inline accept path.
+	var finErr error
+	if neg.LocalRole == models.InterbankNegotiationRoleSeller {
+		finErr = interbank.FinaliseAcceptCommit(r.db, r.otcWalletRepo, r.negRepo, neg)
+	} else {
+		finErr = interbank.FinaliseBuyerAcceptCommit(r.db, r.otcWalletRepo, r.negRepo, neg)
+	}
+	if finErr != nil {
+		slog.Error("interbank reconcile: local credit / finalise failed after accept COMMIT_TX resend",
+			"err", finErr, "role", neg.LocalRole, "negotiation", neg.NegotiationID, "tx_id", neg.AcceptTxID)
 		return
 	}
 	slog.Info("interbank reconcile: accept COMMIT_TX resent and finalised",
