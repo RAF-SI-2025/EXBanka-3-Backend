@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -37,6 +38,11 @@ type Config struct {
 	SMTPHost string
 	SMTPPort int
 	SMTPFrom string
+
+	// SagaFaultHooks enables the X-Saga-* fault-injection headers used by the
+	// SAGA test suite (files/SAGA.md). Test builds only — Load() refuses to
+	// start when this is set together with a release/production APP_ENV.
+	SagaFaultHooks bool
 }
 
 func Load() *Config {
@@ -68,6 +74,18 @@ func Load() *Config {
 		SMTPHost:           getEnv("SMTP_HOST", "mailhog"),
 		SMTPPort:           smtpPort,
 		SMTPFrom:           getEnv("SMTP_FROM", "noreply@bank.com"),
+		SagaFaultHooks:     getEnvBool("SAGA_FAULT_HOOKS"),
+	}
+
+	// The fault-injection hooks let a caller force saga phases to fail via
+	// request headers — safe in tests, dangerous in production. Refuse to boot
+	// if they are enabled in a release environment (files/SAGA.md).
+	if cfg.SagaFaultHooks {
+		if env := strings.ToLower(getEnv("APP_ENV", "")); env == "production" || env == "prod" || env == "release" {
+			slog.Error("SAGA_FAULT_HOOKS must not be enabled in release mode", "service", "exchange-service", "app_env", env)
+			os.Exit(1)
+		}
+		slog.Warn("SAGA fault-injection hooks ENABLED — test build only", "service", "exchange-service")
 	}
 
 	slog.Info("Exchange-service config loaded",
@@ -95,4 +113,12 @@ func getEnvInt(key string, defaultVal int) int {
 		slog.Warn("invalid int env var, using default", "key", key, "raw", v, "default", defaultVal)
 	}
 	return defaultVal
+}
+
+func getEnvBool(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
