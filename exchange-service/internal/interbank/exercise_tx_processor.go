@@ -30,13 +30,13 @@ import (
 //
 // COMMIT_TX effects on the seller's side:
 //
-//	1. Mark the local OTC negotiation as exercised (we reuse the
-//	   negotiation row's lifecycle since we don't separately track
-//	   seller-side option contracts yet — see "Known gap" below).
-//	2. Decrement the seller's stock holding by StockAmount, releasing
-//	   the reservation that the acceptance flow took. Realised profit
-//	   is computed via RecordSellFillTx.
-//	3. Credit the seller's account by CashAmount in the strike currency.
+//  1. Mark the local OTC negotiation as exercised (we reuse the
+//     negotiation row's lifecycle since we don't separately track
+//     seller-side option contracts yet — see "Known gap" below).
+//  2. Decrement the seller's stock holding by StockAmount, releasing
+//     the reservation that the acceptance flow took. Realised profit
+//     is computed via RecordSellFillTx.
+//  3. Credit the seller's account by CashAmount in the strike currency.
 //
 // Known gap: cross-bank OTC acceptance does not currently reserve the
 // seller's local stock holding (see Additions.md §3.2). If the seller
@@ -395,23 +395,35 @@ func parseExerciseTx(tx *Transaction) (*exerciseTx, *NoVoteReason) {
 			default:
 				return nil, &NoVoteReason{Reason: ReasonUnacceptableAsset, Posting: ptg}
 			}
-		case TxAccountPerson:
-			if ptg.Account.ID == nil {
-				return nil, &NoVoteReason{Reason: ReasonUnacceptableAsset, Posting: ptg}
-			}
+		case TxAccountPerson, TxAccountAccount:
+			// The buyer's two legs. Per spec §2.6 monetary values are held by
+			// ACCOUNTs (a currency account number) while stocks are held by
+			// PERSONs (a ForeignBankId). So the cash leg legitimately arrives
+			// as EITHER ACCOUNT or PERSON; the stock leg must be PERSON, since
+			// it carries the buyer identity we validate against the
+			// negotiation. (We previously rejected the spec-valid ACCOUNT cash
+			// leg with UNACCEPTABLE_ASSET.)
 			switch ptg.Asset.Type {
 			case AssetMonas:
 				if ptg.Asset.Monas == nil || parsed.buyerCashLeg != nil {
 					return nil, &NoVoteReason{Reason: ReasonUnacceptableAsset, Posting: ptg}
 				}
+				if ptg.Account.Type == TxAccountPerson && ptg.Account.ID == nil {
+					return nil, &NoVoteReason{Reason: ReasonUnacceptableAsset, Posting: ptg}
+				}
 				parsed.buyerCashLeg = ptg
-				parsed.buyerRouting = ptg.Account.ID.RoutingNumber
-				parsed.buyerID = ptg.Account.ID.ID
 			case AssetStock:
+				// Stocks are held by persons — a stock leg must be PERSON and
+				// identify the buyer by ForeignBankId.
+				if ptg.Account.Type != TxAccountPerson || ptg.Account.ID == nil {
+					return nil, &NoVoteReason{Reason: ReasonUnacceptableAsset, Posting: ptg}
+				}
 				if ptg.Asset.Stock == nil || parsed.buyerStockLeg != nil {
 					return nil, &NoVoteReason{Reason: ReasonUnacceptableAsset, Posting: ptg}
 				}
 				parsed.buyerStockLeg = ptg
+				parsed.buyerRouting = ptg.Account.ID.RoutingNumber
+				parsed.buyerID = ptg.Account.ID.ID
 				parsed.stockAmount = ptg.Amount
 			default:
 				return nil, &NoVoteReason{Reason: ReasonUnacceptableAsset, Posting: ptg}
@@ -431,10 +443,16 @@ func parseExerciseTx(tx *Transaction) (*exerciseTx, *NoVoteReason) {
 		parsed.optionStockLeg.Account.ID.ID != parsed.optionNegID {
 		return nil, &NoVoteReason{Reason: ReasonUnacceptableAsset, Posting: parsed.optionStockLeg}
 	}
-	// Both buyer postings must refer to the same buyer.
-	if parsed.buyerStockLeg.Account.ID.RoutingNumber != parsed.buyerRouting ||
-		parsed.buyerStockLeg.Account.ID.ID != parsed.buyerID {
-		return nil, &NoVoteReason{Reason: ReasonUnacceptableAsset, Posting: parsed.buyerStockLeg}
+	// If the buyer's cash leg is PERSON-typed it must name the same buyer as
+	// the stock leg. An ACCOUNT-typed cash leg carries a currency account
+	// number (the buyer's bank owns the person→account mapping), so there's
+	// nothing to cross-check — the buyer identity comes from the stock leg.
+	if parsed.buyerCashLeg.Account.Type == TxAccountPerson {
+		if parsed.buyerCashLeg.Account.ID == nil ||
+			parsed.buyerCashLeg.Account.ID.RoutingNumber != parsed.buyerRouting ||
+			parsed.buyerCashLeg.Account.ID.ID != parsed.buyerID {
+			return nil, &NoVoteReason{Reason: ReasonUnacceptableAsset, Posting: parsed.buyerCashLeg}
+		}
 	}
 
 	// Cash leg signs: option debited (+π·k), buyer credited (-π·k).
