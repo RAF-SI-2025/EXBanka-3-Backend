@@ -100,3 +100,68 @@ func TestMarketRepository_SeededCatalogIsIdempotentAndQueryable(t *testing.T) {
 		t.Fatalf("expected latest history high/low to bound price, got %+v", last)
 	}
 }
+
+func TestMarketRepository_EnsureForeignListing(t *testing.T) {
+	db := openMarketRepositoryTestDB(t, "market_repository_ensure_foreign")
+	if err := database.SeedMarketData(db); err != nil {
+		t.Fatalf("market seed failed: %v", err)
+	}
+	repo := NewMarketRepository(db)
+
+	// Existing locally-listed ticker: returns the seeded row, no new insert.
+	before, err := repo.GetListingRecordByTicker("AAPL")
+	if err != nil || before == nil {
+		t.Fatalf("expected seeded AAPL, got %+v err=%v", before, err)
+	}
+	got, err := repo.EnsureForeignListing("AAPL", "USD", 1.23)
+	if err != nil {
+		t.Fatalf("EnsureForeignListing(AAPL) error: %v", err)
+	}
+	if got.ID != before.ID {
+		t.Fatalf("expected existing AAPL id %d, got %d", before.ID, got.ID)
+	}
+	if got.Price == 1.23 {
+		t.Fatalf("EnsureForeignListing must not overwrite an existing listing's price")
+	}
+
+	// Unknown cross-bank ticker: synthesised, seeded from the strike,
+	// anchored to a USD exchange.
+	const strike = 41.5
+	created, err := repo.EnsureForeignListing("BAC", "USD", strike)
+	if err != nil {
+		t.Fatalf("EnsureForeignListing(BAC) error: %v", err)
+	}
+	if created == nil || created.ID == 0 {
+		t.Fatalf("expected a synthesised BAC listing, got %+v", created)
+	}
+	if created.Ticker != "BAC" || created.Type != "stock" {
+		t.Fatalf("unexpected synthesised listing: %+v", created)
+	}
+	if created.Price != strike || created.Ask != strike || created.Bid != strike {
+		t.Fatalf("expected price/ask/bid seeded to %v, got %+v", strike, created)
+	}
+
+	var ex models.MarketExchangeRecord
+	if err := db.First(&ex, created.ExchangeID).Error; err != nil {
+		t.Fatalf("loading anchored exchange: %v", err)
+	}
+	if ex.Currency != "USD" {
+		t.Fatalf("expected USD exchange for USD contract, got %q", ex.Currency)
+	}
+
+	// Idempotent: a second call returns the same row, no duplicate.
+	again, err := repo.EnsureForeignListing("BAC", "USD", 999)
+	if err != nil {
+		t.Fatalf("second EnsureForeignListing(BAC) error: %v", err)
+	}
+	if again.ID != created.ID {
+		t.Fatalf("expected idempotent BAC id %d, got %d", created.ID, again.ID)
+	}
+	var count int64
+	if err := db.Model(&models.MarketListingRecord{}).Where("ticker = ?", "BAC").Count(&count).Error; err != nil {
+		t.Fatalf("count BAC listings: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 BAC listing, got %d", count)
+	}
+}

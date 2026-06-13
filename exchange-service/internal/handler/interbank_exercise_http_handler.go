@@ -139,6 +139,21 @@ func (h *InterbankOtcHTTPHandler) exerciseOptionContract(w http.ResponseWriter, 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("unknown asset ticker %q: %v", contract.StockTicker, err)})
 		return
 	}
+	if listing == nil {
+		// Cross-bank contract on a ticker we don't list locally (the
+		// §public-stock feed carries tickers only, no prices). Create a
+		// synthetic listing seeded from the strike so the buyer-side
+		// holding can be credited on commit — portfolio_holdings.asset_id
+		// FKs to market_listings. Previously listing was nil here and the
+		// commit path nil-dereferenced listing.ID, panicking the handler
+		// (recovered per-connection by net/http, surfaced upstream as a
+		// "connection termination before headers").
+		listing, err = h.marketRepo.EnsureForeignListing(contract.StockTicker, contract.PricePerUnitCurrency, contract.PricePerUnitAmount)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": fmt.Sprintf("listing foreign asset %q: %v", contract.StockTicker, err)})
+			return
+		}
+	}
 
 	cashAmount := contract.PricePerUnitAmount * contract.Amount
 

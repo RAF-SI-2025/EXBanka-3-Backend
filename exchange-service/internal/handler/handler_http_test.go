@@ -20,13 +20,18 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 const testJWTSecret = "test-secret"
 
 func newTestDB(t *testing.T, name string) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", name)), &gorm.Config{})
+	// Silence gorm's logger so the SAGA narration isn't drowned out by SQL noise
+	// and "record not found" lines (which are expected during rollback paths).
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", name)), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
