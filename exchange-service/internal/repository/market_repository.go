@@ -2,9 +2,11 @@ package repository
 
 import (
 	"errors"
+	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type MarketRepository struct {
@@ -202,6 +204,69 @@ func (r *MarketRepository) GetListingRecordByTicker(ticker string) (*models.Mark
 		return nil, err
 	}
 	return &record, nil
+}
+
+// EnsureForeignListing returns the local listing for ticker, creating a
+// synthetic one if it does not exist. Cross-bank option contracts can
+// reference tickers we don't list locally (the §public-stock feed
+// carries tickers only, no prices), so when a buyer exercises such a
+// contract we still need a market_listings row — portfolio_holdings.
+// asset_id FKs to it. Price/ask/bid are seeded from the caller-supplied
+// value (the option strike), the exchange is chosen by currency, and
+// volume is left 0. The insert is idempotent on ticker so concurrent
+// exercises of the same foreign asset don't collide.
+func (r *MarketRepository) EnsureForeignListing(ticker, currency string, seedPrice float64) (*models.MarketListingRecord, error) {
+	if existing, err := r.GetListingRecordByTicker(ticker); err != nil {
+		return nil, err
+	} else if existing != nil {
+		return existing, nil
+	}
+
+	exchangeID, err := r.pickExchangeForCurrency(currency)
+	if err != nil {
+		return nil, err
+	}
+
+	row := &models.MarketListingRecord{
+		Ticker:      ticker,
+		Name:        ticker,
+		ExchangeID:  exchangeID,
+		LastRefresh: time.Now().UTC(),
+		Price:       seedPrice,
+		Ask:         seedPrice,
+		Bid:         seedPrice,
+		Volume:      0,
+		Type:        "stock",
+	}
+	if err := r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "ticker"}},
+		DoNothing: true,
+	}).Create(row).Error; err != nil {
+		return nil, err
+	}
+	if row.ID == 0 {
+		// A concurrent exercise inserted it first; return that row.
+		return r.GetListingRecordByTicker(ticker)
+	}
+	return row, nil
+}
+
+// pickExchangeForCurrency returns the id of an enabled exchange whose
+// currency matches, falling back to any enabled exchange. Used to anchor
+// synthetic foreign listings to a plausible venue.
+func (r *MarketRepository) pickExchangeForCurrency(currency string) (uint, error) {
+	var ex models.MarketExchangeRecord
+	err := r.db.Where("enabled = ? AND currency = ?", true, currency).Order("id ASC").First(&ex).Error
+	if err == nil {
+		return ex.ID, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, err
+	}
+	if err := r.db.Where("enabled = ?", true).Order("id ASC").First(&ex).Error; err != nil {
+		return 0, err
+	}
+	return ex.ID, nil
 }
 
 func (r *MarketRepository) GetHistory(ticker string) ([]models.ListingDailyPriceInfo, error) {
