@@ -3,9 +3,11 @@ package service
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/notify"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/repository"
 )
 
@@ -18,10 +20,17 @@ type OtcService struct {
 	portfolioRepo *repository.PortfolioRepository
 	otcRepo       *repository.OtcRepository
 	orchestrator  *SagaOrchestrator
+	notifier      *notify.Client
 }
 
 func NewOtcService(portfolioRepo *repository.PortfolioRepository, otcRepo *repository.OtcRepository) *OtcService {
 	return &OtcService{portfolioRepo: portfolioRepo, otcRepo: otcRepo}
+}
+
+// WithNotifier wires the optional best-effort notification client.
+func (s *OtcService) WithNotifier(n *notify.Client) *OtcService {
+	s.notifier = n
+	return s
 }
 
 func (s *OtcService) WithOrchestrator(orchestrator *SagaOrchestrator) *OtcService {
@@ -232,15 +241,37 @@ func (s *OtcService) CounterOffer(input CounterOtcOfferInput) (*models.OtcOfferR
 	if err != nil {
 		return nil, err
 	}
+
+	// Notify the counterparty about the new counter-offer terms.
+	recipientID, recipientType := otcOtherParty(updated, input.ModifiedByID, input.ModifiedByType)
+	emitOtcNotification(s.notifier, recipientID, recipientType, "OTC_COUNTER",
+		"Nova kontraponuda",
+		fmt.Sprintf("Druga strana je poslala kontraponudu za %s (%.0f kom @ %.2f).",
+			updated.StockListing.Ticker, updated.Amount, updated.PricePerStock))
+
 	return updated, nil
 }
 
 func (s *OtcService) DeclineOffer(offerID uint, sellerID uint, sellerType string) (*models.OtcOfferRecord, error) {
-	return s.updateOfferStatusForParticipant(offerID, sellerID, sellerType, models.OtcOfferStatusDeclined)
+	offer, err := s.updateOfferStatusForParticipant(offerID, sellerID, sellerType, models.OtcOfferStatusDeclined)
+	if err == nil && offer != nil {
+		recipientID, recipientType := otcOtherParty(offer, sellerID, sellerType)
+		emitOtcNotification(s.notifier, recipientID, recipientType, "OTC_DECLINED",
+			"Ponuda odbijena",
+			fmt.Sprintf("Druga strana je odbila OTC ponudu za %s.", offer.StockListing.Ticker))
+	}
+	return offer, err
 }
 
 func (s *OtcService) CancelOffer(offerID uint, buyerID uint, buyerType string) (*models.OtcOfferRecord, error) {
-	return s.updateOfferStatusForParticipant(offerID, buyerID, buyerType, models.OtcOfferStatusCancelled)
+	offer, err := s.updateOfferStatusForParticipant(offerID, buyerID, buyerType, models.OtcOfferStatusCancelled)
+	if err == nil && offer != nil {
+		recipientID, recipientType := otcOtherParty(offer, buyerID, buyerType)
+		emitOtcNotification(s.notifier, recipientID, recipientType, "OTC_CANCELLED",
+			"Ponuda povučena",
+			fmt.Sprintf("Druga strana je povukla OTC ponudu za %s.", offer.StockListing.Ticker))
+	}
+	return offer, err
 }
 
 func (s *OtcService) AcceptOffer(offerID uint, userID uint, userType string) (*models.OtcContractRecord, error) {
@@ -272,6 +303,13 @@ func (s *OtcService) AcceptOffer(offerID uint, userID uint, userType string) (*m
 		}
 		return nil, err
 	}
+
+	// Notify the counterparty that the offer was accepted (contract created).
+	recipientID, recipientType := otcOtherParty(offer, userID, userType)
+	emitOtcNotification(s.notifier, recipientID, recipientType, "OTC_ACCEPTED",
+		"Ponuda prihvaćena",
+		fmt.Sprintf("Druga strana je prihvatila OTC ponudu za %s. Ugovor je kreiran.", offer.StockListing.Ticker))
+
 	return contract, nil
 }
 
@@ -312,6 +350,38 @@ func (s *OtcService) ExpireDueContracts(referenceTime time.Time) (int, error) {
 		referenceTime = time.Now().UTC()
 	}
 	return s.otcRepo.ExpireValidContracts(referenceTime.UTC())
+}
+
+// SendExpiryReminders notifies both parties of OTC option contracts whose
+// settlement date is within withinDays, once per contract. Returns the number
+// of contracts reminded.
+func (s *OtcService) SendExpiryReminders(referenceTime time.Time, withinDays int) (int, error) {
+	if referenceTime.IsZero() {
+		referenceTime = time.Now().UTC()
+	}
+	contracts, err := s.otcRepo.ListContractsNeedingExpiryReminder(referenceTime.UTC(), withinDays)
+	if err != nil {
+		return 0, err
+	}
+	reminded := 0
+	for i := range contracts {
+		c := &contracts[i]
+		days := int(c.SettlementDate.Sub(referenceTime).Hours()/24) + 1
+		if days < 0 {
+			days = 0
+		}
+		title := "OTC ugovor uskoro ističe"
+		body := fmt.Sprintf("Opcioni ugovor za %s ističe za %d dan(a) (datum saldiranja %s).",
+			c.StockListing.Ticker, days, c.SettlementDate.Format("02.01.2006"))
+		emitOtcNotification(s.notifier, c.BuyerID, c.BuyerType, "OTC_EXPIRING", title, body)
+		emitOtcNotification(s.notifier, c.SellerID, c.SellerType, "OTC_EXPIRING", title, body)
+		if err := s.otcRepo.MarkExpiryReminderSent(c.ID); err != nil {
+			slog.Error("otc: failed to mark expiry reminder sent", "contractID", c.ID, "error", err)
+			continue
+		}
+		reminded++
+	}
+	return reminded, nil
 }
 
 type ExerciseContractResult struct {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/notify"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/repository"
 	"github.com/robfig/cron/v3"
 	"gorm.io/gorm"
@@ -29,6 +30,7 @@ func StartCronJobs(
 	interbankReconcile *InterbankReconcileRunner,
 	publicStockCache *PublicStockCacheRunner,
 	emailSvc EmailSender,
+	notifier *notify.Client,
 ) *cron.Cron {
 	c := cron.New()
 
@@ -43,7 +45,7 @@ func StartCronJobs(
 	// Order execution engine: attempt to fill active orders every minute.
 	orderRepo := repository.NewOrderRepository(db)
 	marketRepo := repository.NewMarketRepository(db)
-	executor := NewOrderExecutor(orderRepo, marketRepo, portfolioSvc, rateProvider)
+	executor := NewOrderExecutor(orderRepo, marketRepo, portfolioSvc, rateProvider).WithNotifier(notifier)
 	_, err = c.AddFunc("@every 1m", func() {
 		executor.Run()
 	})
@@ -51,12 +53,14 @@ func StartCronJobs(
 		slog.Error("Failed to add order executor cron job", "error", err)
 	}
 
-	// OTC option expiry: release reserved shares after settlement date passes.
-	otcSvc := NewOtcService(repository.NewPortfolioRepository(db), repository.NewOtcRepository(db))
+	// OTC option expiry: release reserved shares after settlement date passes,
+	// and remind both parties a few days before settlement.
+	otcSvc := NewOtcService(repository.NewPortfolioRepository(db), repository.NewOtcRepository(db)).WithNotifier(notifier)
 	ibOtcRepo := repository.NewInterbankOtcRepository(db)
 	_, err = c.AddFunc("@every 1h", func() {
 		expireDueOtcContracts(otcSvc)
 		expireDueInterbankReservations(ibOtcRepo)
+		remindExpiringOtcContracts(otcSvc)
 	})
 	if err != nil {
 		slog.Error("Failed to add OTC expiry cron job", "error", err)
@@ -136,6 +140,21 @@ func StartCronJobs(
 	c.Start()
 	slog.Info("Exchange-service cron jobs started", "jobs", len(c.Entries()))
 	return c
+}
+
+// otcExpiryReminderDays is how many days before settlement both parties are
+// reminded that an OTC option contract is about to expire.
+const otcExpiryReminderDays = 3
+
+func remindExpiringOtcContracts(otcSvc *OtcService) {
+	reminded, err := otcSvc.SendExpiryReminders(time.Now().UTC(), otcExpiryReminderDays)
+	if err != nil {
+		slog.Error("Failed to send OTC expiry reminders", "error", err)
+		return
+	}
+	if reminded > 0 {
+		slog.Info("Sent OTC expiry reminders", "count", reminded)
+	}
 }
 
 func expireDueOtcContracts(otcSvc *OtcService) {

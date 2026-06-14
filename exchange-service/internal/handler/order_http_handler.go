@@ -11,16 +11,18 @@ import (
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/auditlog"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/config"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/notify"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/service"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/util"
 	"gorm.io/gorm"
 )
 
 type OrderHTTPHandler struct {
-	cfg     *config.Config
-	svc     *service.OrderService
-	fundSvc *service.FundService
-	db      *gorm.DB
+	cfg      *config.Config
+	svc      *service.OrderService
+	fundSvc  *service.FundService
+	notifier *notify.Client
+	db       *gorm.DB
 }
 
 func NewOrderHTTPHandler(cfg *config.Config, svc *service.OrderService, db *gorm.DB) *OrderHTTPHandler {
@@ -31,6 +33,13 @@ func NewOrderHTTPHandler(cfg *config.Config, svc *service.OrderService, db *gorm
 // supervisor buy orders placed on behalf of an investment fund.
 func (h *OrderHTTPHandler) WithFundService(fundSvc *service.FundService) *OrderHTTPHandler {
 	h.fundSvc = fundSvc
+	return h
+}
+
+// WithNotifier wires the optional best-effort notification client. When unset,
+// notification emits are silently skipped.
+func (h *OrderHTTPHandler) WithNotifier(n *notify.Client) *OrderHTTPHandler {
+	h.notifier = n
 	return h
 }
 
@@ -160,10 +169,32 @@ func (h *OrderHTTPHandler) createOrder(w http.ResponseWriter, r *http.Request) {
 		AfterHours:   body.AfterHours,
 	}
 
+	// Capture the human caller for order-lifecycle notifications (separate from
+	// the order's owner identity, which may be the bank or a fund).
+	notifyID, notifyType := notifyRecipient(claims)
+	input.NotifyUserID = notifyID
+	input.NotifyUserType = notifyType
+	input.NotifyEmail = claims.Email
+
 	result, err := h.svc.CreateOrder(input)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 		return
+	}
+
+	// Notify the human who placed the order that it was created and is awaiting
+	// processing. Best-effort: never blocks the response.
+	if h.notifier != nil {
+		h.notifier.Emit(notify.Event{
+			UserID:    notifyID,
+			UserType:  notifyType,
+			Type:      "ORDER_CREATED",
+			Title:     "Order kreiran",
+			Body:      fmt.Sprintf("Vaš %s order za %s (količina %d) je kreiran i čeka obradu.", body.Direction, body.AssetTicker, body.Quantity),
+			Link:      "/orders",
+			SendEmail: true,
+			EmailTo:   claims.Email,
+		})
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
@@ -382,6 +413,17 @@ func callerIdentity(claims *util.Claims) (userID uint, userType string) {
 		return claims.ClientID, "client"
 	}
 	return bankUserID, bankUserType
+}
+
+// notifyRecipient returns the human identity (client or employee) for
+// order-lifecycle notifications. Unlike callerIdentity it keeps the employee's
+// own id/type so the notification reaches their in-app bell, rather than
+// collapsing onto the shared bank identity.
+func notifyRecipient(claims *util.Claims) (userID uint, userType string) {
+	if claims.TokenSource == "employee" {
+		return claims.EmployeeID, "employee"
+	}
+	return claims.ClientID, "client"
 }
 
 func isSupervisor(claims *util.Claims) bool {

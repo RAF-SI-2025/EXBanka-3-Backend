@@ -39,6 +39,12 @@ type Config struct {
 	SMTPPort int
 	SMTPFrom string
 
+	// Notification emit (in-app + email). NotificationServiceURL is the base
+	// URL of notification-service; InternalAPIKey is the shared secret sent in
+	// the X-Internal-Key header. Empty URL disables emit (best-effort).
+	NotificationServiceURL string
+	InternalAPIKey         string
+
 	// SagaFaultHooks enables the X-Saga-* fault-injection headers used by the
 	// SAGA test suite (files/SAGA.md). Test builds only — Load() refuses to
 	// start when this is set together with a release/production APP_ENV.
@@ -56,25 +62,27 @@ func Load() *Config {
 	smtpPort, _ := strconv.Atoi(getEnv("SMTP_PORT", "1025"))
 
 	cfg := &Config{
-		DBHost:             getEnv("DB_HOST", "localhost"),
-		DBPort:             getEnv("DB_PORT", "5432"),
-		DBUser:             getEnv("DB_USER", "postgres"),
-		DBPassword:         getEnv("DB_PASSWORD", "postgres"),
-		DBName:             getEnv("DB_NAME", "bankdb"),
-		DBSSLMode:          getEnv("DB_SSL_MODE", "disable"),
-		GRPCPort:           getEnv("GRPC_PORT", "9098"),
-		HTTPPort:           getEnv("HTTP_PORT", "8088"),
-		JWTSecret:          os.Getenv("JWT_SECRET"),
-		AlphaVantageAPIKey: getEnv("ALPHA_VANTAGE_API_KEY", "demo"),
-		RedisAddr:          getEnv("REDIS_ADDR", ""),
-		RedisPassword:      getEnv("REDIS_PASSWORD", ""),
-		RedisDB:            getEnvInt("REDIS_DB", 0),
-		OwnRoutingNumber:   getEnvInt("BANK_ROUTING_NUMBER", 333),
-		PartnerBanksJSON:   getEnv("PARTNER_BANKS_JSON", "[]"),
-		SMTPHost:           getEnv("SMTP_HOST", "mailhog"),
-		SMTPPort:           smtpPort,
-		SMTPFrom:           getEnv("SMTP_FROM", "noreply@bank.com"),
-		SagaFaultHooks:     getEnvBool("SAGA_FAULT_HOOKS"),
+		DBHost:                 getEnv("DB_HOST", "localhost"),
+		DBPort:                 getEnv("DB_PORT", "5432"),
+		DBUser:                 getEnv("DB_USER", "postgres"),
+		DBPassword:             getEnv("DB_PASSWORD", "postgres"),
+		DBName:                 getEnv("DB_NAME", "bankdb"),
+		DBSSLMode:              getEnv("DB_SSL_MODE", "disable"),
+		GRPCPort:               getEnv("GRPC_PORT", "9098"),
+		HTTPPort:               getEnv("HTTP_PORT", "8088"),
+		JWTSecret:              os.Getenv("JWT_SECRET"),
+		AlphaVantageAPIKey:     getEnv("ALPHA_VANTAGE_API_KEY", "demo"),
+		RedisAddr:              getEnv("REDIS_ADDR", ""),
+		RedisPassword:          getEnv("REDIS_PASSWORD", ""),
+		RedisDB:                getEnvInt("REDIS_DB", 0),
+		OwnRoutingNumber:       getEnvInt("BANK_ROUTING_NUMBER", 333),
+		PartnerBanksJSON:       getEnv("PARTNER_BANKS_JSON", "[]"),
+		SMTPHost:               getEnv("SMTP_HOST", "mailhog"),
+		SMTPPort:               smtpPort,
+		SMTPFrom:               getEnv("SMTP_FROM", "noreply@bank.com"),
+		NotificationServiceURL: getEnv("NOTIFICATION_SERVICE_URL", ""),
+		InternalAPIKey:         getEnv("INTERNAL_API_KEY", ""),
+		SagaFaultHooks:         getEnvBool("SAGA_FAULT_HOOKS"),
 	}
 
 	// The fault-injection hooks let a caller force saga phases to fail via

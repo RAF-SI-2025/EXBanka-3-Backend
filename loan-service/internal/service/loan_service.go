@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/notify"
 	"gorm.io/gorm"
 )
 
@@ -51,6 +52,14 @@ type LoanService struct {
 	installmentRepo InstallmentRepositoryInterface
 	accountRepo     AccountRepositoryInterface
 	notifier        *NotificationService
+	appNotifier     *notify.Client
+}
+
+// WithAppNotifier wires the optional in-app notification client (distinct from
+// the email NotificationService).
+func (s *LoanService) WithAppNotifier(n *notify.Client) *LoanService {
+	s.appNotifier = n
+	return s
 }
 
 func NewLoanService(db *gorm.DB, loanRepo LoanRepositoryInterface, installmentRepo InstallmentRepositoryInterface, accountRepo AccountRepositoryInterface) *LoanService {
@@ -251,6 +260,18 @@ func (s *LoanService) RequestLoan(input CreateLoanInput) (*models.Loan, error) {
 	if err := s.loanRepo.Create(loan); err != nil {
 		return nil, fmt.Errorf("failed to save loan: %w", err)
 	}
+
+	// In-app notification: loan request received and pending approval.
+	if s.appNotifier != nil {
+		s.appNotifier.Emit(notify.Event{
+			UserID:   loan.ClientID,
+			UserType: "client",
+			Type:     "LOAN_REQUESTED",
+			Title:    "Zahtev za kredit primljen",
+			Body:     fmt.Sprintf("Vaš zahtev za %s kredit (%.2f, %d meseci) je primljen i čeka odobrenje.", loan.Vrsta, loan.Iznos, loan.Period),
+			Link:     "/loans",
+		})
+	}
 	return loan, nil
 }
 
@@ -351,6 +372,18 @@ func (s *LoanService) ApproveLoan(loanID, zaposleniID uint) (*models.Loan, error
 }
 
 func (s *LoanService) sendLoanApprovedEmail(loan *models.Loan) {
+	// In-app notification for the client (independent of email below).
+	if s.appNotifier != nil {
+		s.appNotifier.Emit(notify.Event{
+			UserID:   loan.ClientID,
+			UserType: "client",
+			Type:     "LOAN_APPROVED",
+			Title:    "Kredit odobren",
+			Body:     fmt.Sprintf("Vaš %s kredit (%.2f) je odobren. Sredstva su isplaćena na račun %s.", loan.Vrsta, loan.Iznos, loan.BrojRacuna),
+			Link:     "/loans",
+		})
+	}
+
 	if s.notifier == nil || s.db == nil {
 		return
 	}

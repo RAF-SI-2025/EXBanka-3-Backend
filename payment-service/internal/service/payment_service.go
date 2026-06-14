@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/payment-service/internal/notify"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -78,6 +79,7 @@ type PaymentService struct {
 	paymentRepo   PaymentRepositoryInterface
 	recipientRepo RecipientRepositoryInterface
 	notifier      PaymentNotificationSender
+	appNotifier   *notify.Client
 	db            *gorm.DB
 }
 
@@ -244,6 +246,7 @@ func (s *PaymentService) settlePayment(payment *models.Payment) (*models.Payment
 	}
 
 	var result *models.Payment
+	var senderClientID, receiverClientID *uint
 	txErr := s.db.Transaction(func(tx *gorm.DB) error {
 		// Re-fetch and lock the payment row to prevent double-execution by
 		// concurrent requests (e.g., same client on two browser tabs).
@@ -325,6 +328,8 @@ func (s *PaymentService) settlePayment(payment *models.Payment) (*models.Payment
 		payment.Status = paymentStatusCompleted
 		payment.VerifikacioniKod = ""
 		payment.VerificationExpiresAt = nil
+		senderClientID = sender.ClientID
+		receiverClientID = receiver.ClientID
 		result = payment
 		return nil
 	})
@@ -335,6 +340,7 @@ func (s *PaymentService) settlePayment(payment *models.Payment) (*models.Payment
 		}
 		return nil, txErr
 	}
+	emitPaymentSettled(s.appNotifier, payment, senderClientID, receiverClientID, "payment")
 	return result, nil
 }
 
@@ -405,6 +411,7 @@ func (s *PaymentService) settlePaymentNonTx(payment *models.Payment) (*models.Pa
 	if err := s.paymentRepo.Save(payment); err != nil {
 		return nil, fmt.Errorf("failed to update payment status: %w", err)
 	}
+	emitPaymentSettled(s.appNotifier, payment, sender.ClientID, receiver.ClientID, "payment")
 	return payment, nil
 }
 

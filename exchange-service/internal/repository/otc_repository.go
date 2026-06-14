@@ -262,6 +262,29 @@ func (r *OtcRepository) ListExpiredValidContracts(referenceTime time.Time) ([]mo
 	return contracts, nil
 }
 
+// ListContractsNeedingExpiryReminder returns still-valid contracts whose
+// settlement date falls within withinDays from referenceTime and which have not
+// yet had an expiry reminder sent. Used by the reminder cron.
+func (r *OtcRepository) ListContractsNeedingExpiryReminder(referenceTime time.Time, withinDays int) ([]models.OtcContractRecord, error) {
+	var contracts []models.OtcContractRecord
+	windowEnd := referenceTime.Add(time.Duration(withinDays) * 24 * time.Hour)
+	if err := r.contractPreloads(r.db).
+		Where("status = ? AND expiry_reminder_sent = ? AND settlement_date > ? AND settlement_date <= ?",
+			models.OtcContractStatusValid, false, otcExpiryCutoff(referenceTime), windowEnd).
+		Order("settlement_date ASC, id ASC").
+		Find(&contracts).Error; err != nil {
+		return nil, err
+	}
+	return contracts, nil
+}
+
+// MarkExpiryReminderSent flags a contract so its expiry reminder fires once.
+func (r *OtcRepository) MarkExpiryReminderSent(contractID uint) error {
+	return r.db.Model(&models.OtcContractRecord{}).
+		Where("id = ?", contractID).
+		Update("expiry_reminder_sent", true).Error
+}
+
 func (r *OtcRepository) ExpireValidContracts(referenceTime time.Time) (int, error) {
 	expiredCount := 0
 	err := r.db.Transaction(func(tx *gorm.DB) error {

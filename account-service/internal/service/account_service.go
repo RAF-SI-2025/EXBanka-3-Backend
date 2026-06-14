@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/notify"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/util"
 )
 
@@ -45,6 +46,13 @@ type AccountService struct {
 	accountRepo  AccountRepositoryInterface
 	currencyRepo CurrencyRepositoryInterface
 	notifSvc     *NotificationService
+	notifier     *notify.Client
+}
+
+// WithNotifier wires the optional in-app notification client.
+func (s *AccountService) WithNotifier(n *notify.Client) *AccountService {
+	s.notifier = n
+	return s
 }
 
 var validLicniPodvrste = map[string]struct{}{
@@ -225,8 +233,23 @@ func (s *AccountService) UpdateAccountLimits(id uint, clientID uint, dnevniLimit
 	if account.ClientID == nil || *account.ClientID != clientID {
 		return fmt.Errorf("samo vlasnik računa može menjati limite")
 	}
-	return s.accountRepo.UpdateFields(id, map[string]interface{}{
+	if err := s.accountRepo.UpdateFields(id, map[string]interface{}{
 		"dnevni_limit":  dnevniLimit,
 		"mesecni_limit": mesecniLimit,
-	})
+	}); err != nil {
+		return err
+	}
+
+	// In-app notification to the account owner about the new limits.
+	if s.notifier != nil {
+		s.notifier.Emit(notify.Event{
+			UserID:   clientID,
+			UserType: "client",
+			Type:     "LIMIT_CHANGED",
+			Title:    "Limiti računa promenjeni",
+			Body:     fmt.Sprintf("Limiti za račun %s su ažurirani: dnevni %.2f, mesečni %.2f.", account.BrojRacuna, dnevniLimit, mesecniLimit),
+			Link:     "/accounts",
+		})
+	}
+	return nil
 }

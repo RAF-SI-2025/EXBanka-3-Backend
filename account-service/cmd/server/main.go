@@ -17,6 +17,7 @@ import (
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/database"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/handler"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/middleware"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/notify"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/repository"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/service"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/util"
@@ -107,17 +108,19 @@ func main() {
 	firmaH := handler.NewFirmaHandler(db, cfg)
 	createAccH := handler.NewCreateAccountHTTPHandler(db, cfg)
 
+	notifier := notify.NewClient(cfg.NotificationServiceURL, cfg.InternalAPIKey)
+
 	accountRepo := repository.NewAccountRepository(db)
 	currencyRepo := repository.NewCurrencyRepository(db)
 	accountNotifSvc := service.NewNotificationService(cfg)
-	accountSvc := service.NewAccountServiceWithRepos(accountRepo, currencyRepo, accountNotifSvc)
+	accountSvc := service.NewAccountServiceWithRepos(accountRepo, currencyRepo, accountNotifSvc).WithNotifier(notifier)
 	listClientAccH := handler.NewListClientAccountsHTTPHandlerWithConfig(accountRepo, cfg)
 	listAllAccH := handler.NewListAllAccountsHTTPHandler(accountSvc, cfg)
 	currencyH := handler.NewCurrencyHTTPHandler(currencyRepo, cfg)
 
 	cardRepo := repository.NewCardRepository(db)
 	notifSvc := service.NewNotificationService(cfg)
-	cardSvc := service.NewCardServiceWithDB(cardRepo, accountRepo, notifSvc, db)
+	cardSvc := service.NewCardServiceWithDB(cardRepo, accountRepo, notifSvc, db).WithNotifier(notifier)
 	cardH := handler.NewCardHTTPHandlerWithConfig(cardSvc, cfg)
 
 	httpMux := http.NewServeMux()
