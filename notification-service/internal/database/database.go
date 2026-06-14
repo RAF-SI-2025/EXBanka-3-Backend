@@ -1,0 +1,55 @@
+package database
+
+import (
+	"fmt"
+	"log/slog"
+
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/notification-service/internal/config"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/notification-service/internal/models"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+)
+
+const migrationAdvisoryLockID int64 = 2026061401
+
+func Connect(cfg *config.Config) (*gorm.DB, error) {
+	dsn := fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s TimeZone=UTC",
+		cfg.DBHost, cfg.DBPort, cfg.DBUser, cfg.DBPassword, cfg.DBName, cfg.DBSSLMode,
+	)
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Info),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to PostgreSQL: %w", err)
+	}
+
+	slog.Info("Connected to PostgreSQL", "host", cfg.DBHost, "port", cfg.DBPort, "db", cfg.DBName)
+	return db, nil
+}
+
+func Migrate(db *gorm.DB) error {
+	slog.Info("Running notification-service database migrations...")
+	if err := withMigrationLock(db, func(tx *gorm.DB) error {
+		return tx.AutoMigrate(&models.Notification{})
+	}); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	slog.Info("Notification-service migrations complete")
+	return nil
+}
+
+func withMigrationLock(db *gorm.DB, migrate func(*gorm.DB) error) error {
+	if db.Dialector.Name() != "postgres" {
+		return migrate(db)
+	}
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", migrationAdvisoryLockID).Error; err != nil {
+			return fmt.Errorf("failed to acquire migration advisory lock: %w", err)
+		}
+		return migrate(tx)
+	})
+}

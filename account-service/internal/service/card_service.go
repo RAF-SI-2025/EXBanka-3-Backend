@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/notify"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/account-service/internal/util"
 	"gorm.io/gorm"
 )
@@ -43,7 +44,14 @@ type CardService struct {
 	cardRepo    CardRepositoryInterface
 	accountRepo AccountRepositoryInterface
 	notifSvc    *NotificationService
+	notifier    *notify.Client
 	db          *gorm.DB
+}
+
+// WithNotifier wires the optional in-app notification client.
+func (s *CardService) WithNotifier(n *notify.Client) *CardService {
+	s.notifier = n
+	return s
 }
 
 func NewCardService(
@@ -285,6 +293,48 @@ func (s *CardService) sendCardStatusNotification(card *models.Card, newStatus st
 	if notify.OvlascenoLiceEmail != "" {
 		_ = s.notifSvc.SendCardStatusEmail(notify.OvlascenoLiceEmail, notify.OvlascenoLiceName, card.BrojKartice, card.VrstaKartice, newStatus)
 	}
+
+	// In-app notification for the card owner (email already sent above).
+	s.emitCardStatusInApp(card, newStatus)
+}
+
+// emitCardStatusInApp posts an in-app notification about a card status change
+// to the owning client. Best-effort and nil-safe.
+func (s *CardService) emitCardStatusInApp(card *models.Card, newStatus string) {
+	if s.notifier == nil || card.ClientID == 0 {
+		return
+	}
+	var title, body string
+	switch newStatus {
+	case "blokirana":
+		title = "Kartica blokirana"
+		body = fmt.Sprintf("Vaša kartica %s je blokirana.", maskCardNumber(card.BrojKartice))
+	case "aktivna":
+		title = "Kartica odblokirana"
+		body = fmt.Sprintf("Vaša kartica %s je ponovo aktivna.", maskCardNumber(card.BrojKartice))
+	case "deaktivirana":
+		title = "Kartica deaktivirana"
+		body = fmt.Sprintf("Vaša kartica %s je trajno deaktivirana.", maskCardNumber(card.BrojKartice))
+	default:
+		title = "Status kartice promenjen"
+		body = fmt.Sprintf("Status vaše kartice %s je promenjen na %s.", maskCardNumber(card.BrojKartice), newStatus)
+	}
+	s.notifier.Emit(notify.Event{
+		UserID:   card.ClientID,
+		UserType: "client",
+		Type:     "CARD_STATUS",
+		Title:    title,
+		Body:     body,
+		Link:     "/cards",
+	})
+}
+
+// maskCardNumber returns a card number with all but the last 4 digits masked.
+func maskCardNumber(num string) string {
+	if len(num) <= 4 {
+		return num
+	}
+	return "•••• " + num[len(num)-4:]
 }
 
 // lookupNotifyFromDB resolves client and ovlasceno lice contact info from the database.

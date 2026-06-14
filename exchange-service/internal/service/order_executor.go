@@ -1,12 +1,14 @@
 package service
 
 import (
+	"fmt"
 	"log/slog"
 	"math"
 	"math/rand"
 	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/notify"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/repository"
 )
 
@@ -18,10 +20,17 @@ type OrderExecutor struct {
 	marketRepo   *repository.MarketRepository
 	portfolioSvc *PortfolioService
 	rateProvider RateProviderInterface
+	notifier     *notify.Client
 }
 
 func NewOrderExecutor(orderRepo *repository.OrderRepository, marketRepo *repository.MarketRepository, portfolioSvc *PortfolioService, rateProvider RateProviderInterface) *OrderExecutor {
 	return &OrderExecutor{orderRepo: orderRepo, marketRepo: marketRepo, portfolioSvc: portfolioSvc, rateProvider: rateProvider}
+}
+
+// WithNotifier wires the optional best-effort notification client.
+func (e *OrderExecutor) WithNotifier(n *notify.Client) *OrderExecutor {
+	e.notifier = n
+	return e
 }
 
 // Run processes all approved, not-done orders and partially or fully fills them
@@ -182,14 +191,29 @@ func (e *OrderExecutor) Run() {
 			}
 		}
 
+		remaining := order.RemainingPortions - fillQty
+
 		slog.Info("order executor: filled",
 			"orderID", order.ID,
 			"type", order.OrderType,
 			"direction", order.Direction,
 			"filled", fillQty,
 			"price", price,
-			"remaining", order.RemainingPortions-fillQty,
+			"remaining", remaining,
 		)
+
+		// Notify the order owner about this fill — fully executed vs partial.
+		if remaining <= 0 {
+			emitOrderNotification(e.notifier, &order, "ORDER_DONE",
+				"Order izvršen",
+				fmt.Sprintf("Vaš %s order za %s je u potpunosti izvršen (%d @ %.2f).",
+					order.Direction, order.Asset.Ticker, order.Quantity, price))
+		} else {
+			emitOrderNotification(e.notifier, &order, "ORDER_PARTIAL",
+				"Delimično izvršenje",
+				fmt.Sprintf("Vaš %s order za %s je delimično izvršen (%d izvršeno, %d preostalo).",
+					order.Direction, order.Asset.Ticker, fillQty, remaining))
+		}
 	}
 }
 

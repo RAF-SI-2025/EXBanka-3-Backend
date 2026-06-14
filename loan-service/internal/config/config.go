@@ -23,6 +23,9 @@ type Config struct {
 	SMTPHost string
 	SMTPPort int
 	SMTPFrom string
+
+	NotificationServiceURL string
+	InternalAPIKey         string
 }
 
 func Load() *Config {
@@ -36,17 +39,19 @@ func Load() *Config {
 	smtpPort, _ := strconv.Atoi(getEnv("SMTP_PORT", "1025"))
 
 	cfg := &Config{
-		DBHost:     getEnv("DB_HOST", "localhost"),
-		DBPort:     getEnv("DB_PORT", "5432"),
-		DBUser:     getEnv("DB_USER", "postgres"),
-		DBPassword: getEnv("DB_PASSWORD", "postgres"),
-		DBName:     getEnv("DB_NAME", "bankdb"),
-		DBSSLMode:  getEnv("DB_SSL_MODE", "disable"),
-		HTTPPort:   getEnv("HTTP_PORT", "8089"),
-		JWTSecret:  os.Getenv("JWT_SECRET"),
-		SMTPHost:   getEnv("SMTP_HOST", "mailhog"),
-		SMTPPort:   smtpPort,
-		SMTPFrom:   getEnv("SMTP_FROM", "noreply@bank.com"),
+		DBHost:                 getEnv("DB_HOST", "localhost"),
+		DBPort:                 getEnv("DB_PORT", "5432"),
+		DBUser:                 getEnv("DB_USER", "postgres"),
+		DBPassword:             getEnv("DB_PASSWORD", "postgres"),
+		DBName:                 getEnv("DB_NAME", "bankdb"),
+		DBSSLMode:              getEnv("DB_SSL_MODE", "disable"),
+		HTTPPort:               getEnv("HTTP_PORT", "8089"),
+		JWTSecret:              os.Getenv("JWT_SECRET"),
+		SMTPHost:               getEnv("SMTP_HOST", "mailhog"),
+		SMTPPort:               smtpPort,
+		SMTPFrom:               getEnv("SMTP_FROM", "noreply@bank.com"),
+		NotificationServiceURL: getEnv("NOTIFICATION_SERVICE_URL", ""),
+		InternalAPIKey:         getEnv("INTERNAL_API_KEY", ""),
 	}
 
 	slog.Info("Loan-service config loaded",

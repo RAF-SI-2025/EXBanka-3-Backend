@@ -22,6 +22,7 @@ jobs:
           - payment-service
           - exchange-service
           - loan-service
+          - notification-service
 
     steps:
       - uses: actions/checkout@v4
@@ -46,7 +47,7 @@ jobs:
       - name: Docker build (no push)
         run: |
           case "${{ matrix.service }}" in
-            transfer-service|payment-service|exchange-service|loan-service)
+            transfer-service|payment-service|exchange-service|loan-service|notification-service)
               docker build -f "${{ matrix.service }}/Dockerfile" "${{ matrix.service }}"
               ;;
             *)

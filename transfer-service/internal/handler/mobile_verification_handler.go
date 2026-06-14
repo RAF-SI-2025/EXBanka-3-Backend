@@ -32,7 +32,7 @@ func NewTransferMobileVerificationHandler(db *gorm.DB, cfg *config.Config, excha
 	transferRepo := repository.NewTransferRepository(db)
 	exchangeSvc := service.NewHTTPExchangeRateService(exchangeServiceURL)
 	notifier := service.NewNotificationService(cfg)
-	svc := service.NewTransferServiceWithReposAndNotifier(accountRepo, transferRepo, exchangeSvc, notifier).WithDB(db)
+	svc := service.NewTransferServiceWithReposAndNotifier(accountRepo, transferRepo, exchangeSvc, notifier).WithDB(db).WithAppNotifier(service.NewAppNotifier(cfg))
 	return &TransferMobileVerificationHandler{svc: svc, db: db, cfg: cfg}
 }
 

@@ -208,6 +208,12 @@ type OrderRecord struct {
 	LastModification time.Time                `gorm:"column:last_modification;not null"`
 	CreatedAt        time.Time                `gorm:"not null"`
 	Transactions     []OrderTransactionRecord `gorm:"foreignKey:OrderID"`
+	// Notify* capture the human who placed the order (client, or the employee
+	// acting for the bank/fund) so order-lifecycle notifications reach a real
+	// inbox and in-app bell. Set once at creation from the caller's JWT.
+	NotifyUserID   uint   `gorm:"column:notify_user_id"`
+	NotifyUserType string `gorm:"column:notify_user_type"` // "client" | "employee"
+	NotifyEmail    string `gorm:"column:notify_email"`
 }
 
 func (OrderRecord) TableName() string { return "orders" }
@@ -326,8 +332,11 @@ type OtcContractRecord struct {
 	ExercisedAtPrice float64 `gorm:"column:exercised_at_price;not null;default:0"`
 	BuyerProfit      float64 `gorm:"column:buyer_profit;not null;default:0"`
 	SellerProfit     float64 `gorm:"column:seller_profit;not null;default:0"`
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// ExpiryReminderSent dedups the "expires in N days" notification so the
+	// daily/hourly reminder cron fires at most once per contract.
+	ExpiryReminderSent bool `gorm:"column:expiry_reminder_sent;not null;default:false"`
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 func (OtcContractRecord) TableName() string { return "otc_contracts" }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/transfer-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/transfer-service/internal/notify"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -81,6 +82,7 @@ type TransferService struct {
 	transferRepo TransferRepositoryInterface
 	exchangeSvc  ExchangeRateServiceInterface
 	notifier     TransferNotificationSender
+	appNotifier  *notify.Client
 	db           *gorm.DB
 }
 
@@ -196,6 +198,7 @@ func (s *TransferService) settleTransfer(transfer *models.Transfer) (*models.Tra
 	}
 
 	var result *models.Transfer
+	var ownerClientID *uint
 	txErr := s.db.Transaction(func(tx *gorm.DB) error {
 		// Re-fetch and lock the transfer row to prevent double-execution.
 		var current models.Transfer
@@ -320,6 +323,7 @@ func (s *TransferService) settleTransfer(transfer *models.Transfer) (*models.Tra
 		transfer.Status = transferStatusCompleted
 		transfer.VerifikacioniKod = ""
 		transfer.VerificationExpiresAt = nil
+		ownerClientID = sender.ClientID
 		result = transfer
 		return nil
 	})
@@ -330,6 +334,7 @@ func (s *TransferService) settleTransfer(transfer *models.Transfer) (*models.Tra
 		}
 		return nil, txErr
 	}
+	emitTransferSettled(s.appNotifier, transfer, ownerClientID)
 	return result, nil
 }
 
@@ -444,6 +449,7 @@ func (s *TransferService) settleTransferNonTx(transfer *models.Transfer) (*model
 	if err := s.transferRepo.Save(transfer); err != nil {
 		return nil, fmt.Errorf("failed to save transfer: %w", err)
 	}
+	emitTransferSettled(s.appNotifier, transfer, sender.ClientID)
 	return transfer, nil
 }
 

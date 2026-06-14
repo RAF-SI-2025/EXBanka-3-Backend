@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/notify"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/repository"
 )
 
@@ -25,6 +26,7 @@ type OrderService struct {
 	orderRepo    *repository.OrderRepository
 	marketRepo   *repository.MarketRepository
 	rateProvider RateProviderInterface
+	notifier     *notify.Client
 }
 
 func NewOrderService(orderRepo *repository.OrderRepository, marketRepo *repository.MarketRepository, rateProvider RateProviderInterface) *OrderService {
@@ -33,6 +35,12 @@ func NewOrderService(orderRepo *repository.OrderRepository, marketRepo *reposito
 		marketRepo:   marketRepo,
 		rateProvider: rateProvider,
 	}
+}
+
+// WithNotifier wires the optional best-effort notification client.
+func (s *OrderService) WithNotifier(n *notify.Client) *OrderService {
+	s.notifier = n
+	return s
 }
 
 // CreateOrderInput holds all fields required to place an order.
@@ -54,6 +62,11 @@ type CreateOrderInput struct {
 	IsMargin     bool
 	AccountID    uint
 	AfterHours   bool
+
+	// Notify* identify the human caller for order-lifecycle notifications.
+	NotifyUserID   uint
+	NotifyUserType string // "client" | "employee"
+	NotifyEmail    string
 }
 
 // CreateOrderResult is the full order record returned after creation.
@@ -217,6 +230,9 @@ func (s *OrderService) CreateOrder(input CreateOrderInput) (*CreateOrderResult, 
 		BalanceAfter:      balanceAfter,
 		LastModification:  now,
 		CreatedAt:         now,
+		NotifyUserID:      input.NotifyUserID,
+		NotifyUserType:    input.NotifyUserType,
+		NotifyEmail:       input.NotifyEmail,
 	}
 
 	if err := s.orderRepo.CreateOrder(order); err != nil {
@@ -301,7 +317,13 @@ func (s *OrderService) ApproveOrder(orderID, supervisorID uint) error {
 		return fmt.Errorf("failed to check settlement date: %w", err)
 	}
 	if expired {
-		return s.orderRepo.UpdateOrderStatus(orderID, "declined", &supervisorID)
+		if err := s.orderRepo.UpdateOrderStatus(orderID, "declined", &supervisorID); err != nil {
+			return err
+		}
+		emitOrderNotification(s.notifier, order, "ORDER_AUTO_CANCELLED",
+			"Order otkazan",
+			fmt.Sprintf("Vaš %s order za %s je automatski otkazan jer je datum saldiranja istekao.", order.Direction, order.Asset.Ticker))
+		return nil
 	}
 
 	// Increment the placing agent's usedLimit in RSD now that the order is officially approved.
@@ -313,7 +335,13 @@ func (s *OrderService) ApproveOrder(orderID, supervisorID uint) error {
 		}
 	}
 
-	return s.orderRepo.UpdateOrderStatus(orderID, "approved", &supervisorID)
+	if err := s.orderRepo.UpdateOrderStatus(orderID, "approved", &supervisorID); err != nil {
+		return err
+	}
+	emitOrderNotification(s.notifier, order, "ORDER_APPROVED",
+		"Order odobren",
+		fmt.Sprintf("Vaš %s order za %s je odobren i prosleđen na izvršenje.", order.Direction, order.Asset.Ticker))
+	return nil
 }
 
 // DeclineOrder declines a pending order on behalf of a supervisor.
@@ -357,7 +385,13 @@ func (s *OrderService) DeclineOrder(orderID, supervisorID uint) error {
 		}
 	}
 
-	return s.orderRepo.UpdateOrderStatus(orderID, "declined", &supervisorID)
+	if err := s.orderRepo.UpdateOrderStatus(orderID, "declined", &supervisorID); err != nil {
+		return err
+	}
+	emitOrderNotification(s.notifier, order, "ORDER_DECLINED",
+		"Order odbijen",
+		fmt.Sprintf("Vaš %s order za %s je odbijen od strane supervizora. Sredstva su vraćena na račun.", order.Direction, order.Asset.Ticker))
+	return nil
 }
 
 // CancelOrder cancels the unfilled portion of an active order.

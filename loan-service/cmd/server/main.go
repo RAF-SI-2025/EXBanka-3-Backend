@@ -16,6 +16,7 @@ import (
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/database"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/handler"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/middleware"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/notify"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/repository"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/service"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/loan-service/internal/util"
@@ -51,7 +52,8 @@ func main() {
 	installmentRepo := repository.NewInstallmentRepository(db)
 	accountRepo := repository.NewAccountRepository(db)
 	notifier := service.NewNotificationService(cfg)
-	loanSvc := service.NewLoanServiceWithNotifier(db, loanRepo, installmentRepo, accountRepo, notifier)
+	appNotifier := notify.NewClient(cfg.NotificationServiceURL, cfg.InternalAPIKey)
+	loanSvc := service.NewLoanServiceWithNotifier(db, loanRepo, installmentRepo, accountRepo, notifier).WithAppNotifier(appNotifier)
 	loanH := handler.NewLoanHandlerWithConfig(loanSvc, cfg, db)
 
 	// Start cron jobs in the background.

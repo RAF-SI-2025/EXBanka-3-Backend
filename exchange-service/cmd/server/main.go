@@ -19,6 +19,7 @@ import (
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/handler"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/interbank"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/middleware"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/notify"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/provider"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/repository"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/service"
@@ -130,7 +131,8 @@ func main() {
 	ibPublicStockCache := service.NewPublicStockCacheRunner(ibRegistry, ibClient, ibPublicStockRepo)
 
 	emailSvc := service.NewSMTPEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPFrom)
-	cronScheduler := service.StartCronJobs(db, portfolioSvc, rateProvider, sagaRetryRunner, fundSvc, ibReconcile, ibPublicStockCache, emailSvc)
+	notifier := notify.NewClient(cfg.NotificationServiceURL, cfg.InternalAPIKey)
+	cronScheduler := service.StartCronJobs(db, portfolioSvc, rateProvider, sagaRetryRunner, fundSvc, ibReconcile, ibPublicStockCache, emailSvc, notifier)
 
 	go func() {
 		slog.Info("Running market data seed in background...")
@@ -146,10 +148,10 @@ func main() {
 	marketSvc := service.NewMarketService(marketProvider)
 	marketH := handler.NewMarketHTTPHandler(cfg, marketSvc, marketRepo)
 
-	orderSvc := service.NewOrderService(orderRepo, marketRepo, rateProvider)
-	orderH := handler.NewOrderHTTPHandler(cfg, orderSvc, db).WithFundService(fundSvc)
+	orderSvc := service.NewOrderService(orderRepo, marketRepo, rateProvider).WithNotifier(notifier)
+	orderH := handler.NewOrderHTTPHandler(cfg, orderSvc, db).WithFundService(fundSvc).WithNotifier(notifier)
 	portfolioH := handler.NewPortfolioHTTPHandler(cfg, portfolioSvc)
-	otcSvc := service.NewOtcService(portfolioRepo, otcRepo).WithOrchestrator(sagaOrchestrator)
+	otcSvc := service.NewOtcService(portfolioRepo, otcRepo).WithOrchestrator(sagaOrchestrator).WithNotifier(notifier)
 	otcH := handler.NewOtcHTTPHandler(cfg, otcSvc).WithSagaQuerier(sagaRepo)
 
 	taxCollector := service.NewTaxCollector(taxSvc, orderRepo, taxRepo)

@@ -32,7 +32,7 @@ func NewPaymentMobileVerificationHandler(db *gorm.DB, cfg *config.Config) *Payme
 	paymentRepo := repository.NewPaymentRepository(db)
 	recipientRepo := repository.NewPaymentRecipientRepository(db)
 	notifSvc := service.NewNotificationService(cfg)
-	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, recipientRepo, notifSvc).WithDB(db)
+	svc := service.NewPaymentServiceWithRepos(accountRepo, paymentRepo, recipientRepo, notifSvc).WithDB(db).WithAppNotifier(service.NewAppNotifier(cfg))
 	return &PaymentMobileVerificationHandler{svc: svc, db: db, cfg: cfg}
 }
 
