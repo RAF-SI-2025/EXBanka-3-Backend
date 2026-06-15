@@ -96,6 +96,7 @@ func main() {
 
 	dividendRepo := repository.NewDividendRepository(db)
 	dividendSvc := service.NewDividendService(dividendRepo, orderRepo, taxSvc, rateProvider)
+	fundSvc = fundSvc.WithDividendRepo(dividendRepo)
 
 	// Inter-bank protocol wiring (Celina 5). The registry parses
 	// PARTNER_BANKS_JSON at startup and is the routing/auth source of
@@ -136,6 +137,7 @@ func main() {
 	emailSvc := service.NewSMTPEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPFrom)
 	notifier := notify.NewClient(cfg.NotificationServiceURL, cfg.InternalAPIKey)
 	dividendSvc = dividendSvc.WithNotifier(notifier)
+	fundSvc = fundSvc.WithNotifier(notifier)
 	cronScheduler := service.StartCronJobs(db, portfolioSvc, rateProvider, sagaRetryRunner, fundSvc, dividendSvc, ibReconcile, ibPublicStockCache, emailSvc, notifier)
 
 	go func() {

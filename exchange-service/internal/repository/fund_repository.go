@@ -68,6 +68,17 @@ func (r *FundRepository) GetAccountByID(accountID uint) (*FundAccountRef, error)
 	return getFundAccountRef(r.db, accountID, false)
 }
 
+// CreditAccountTx / DebitAccountTx expose the internal balance moves so callers
+// (e.g. fund-dividend distribution) can compose them inside their own
+// transaction. DebitAccountTx fails if the available balance is insufficient.
+func CreditAccountTx(tx *gorm.DB, accountID uint, amount float64) error {
+	return creditFundAccount(tx, accountID, amount)
+}
+
+func DebitAccountTx(tx *gorm.DB, accountID uint, amount float64) error {
+	return debitFundAccount(tx, accountID, amount)
+}
+
 func (r *FundRepository) findOrCreateRSDCurrencyID(tx *gorm.DB) (uint, error) {
 	var id uint
 	err := tx.Table("currencies").Select("id").Where("kod = ?", "RSD").Limit(1).Scan(&id).Error
@@ -349,6 +360,51 @@ func (r *FundRepository) ListTransactionsForClient(clientID uint, clientType str
 		return nil, err
 	}
 	return txs, nil
+}
+
+// --- dividends (Celina 4) ---
+
+func (r *FundRepository) UpdateDividendPolicy(fundID uint, policy string) error {
+	return r.db.Model(&models.InvestmentFundRecord{}).Where("id = ?", fundID).
+		Updates(map[string]interface{}{"dividend_policy": policy, "updated_at": time.Now().UTC()}).Error
+}
+
+func (r *FundRepository) FundDividendExists(fundID, assetID uint, period string) (bool, error) {
+	var count int64
+	err := r.db.Model(&models.FundDividendRecord{}).
+		Where("fund_id = ? AND asset_id = ? AND period = ?", fundID, assetID, period).
+		Count(&count).Error
+	return count > 0, err
+}
+
+func (r *FundRepository) CreateFundDividend(rec *models.FundDividendRecord) error {
+	return r.db.Create(rec).Error
+}
+
+func (r *FundRepository) ListFundDividends(fundID uint) ([]models.FundDividendRecord, error) {
+	var recs []models.FundDividendRecord
+	if err := r.db.Where("fund_id = ?", fundID).Order("paid_at DESC, id DESC").Find(&recs).Error; err != nil {
+		return nil, err
+	}
+	return recs, nil
+}
+
+// FindParticipantRSDAccount returns an active RSD account for a fund participant
+// (client_id for clients; a non-state firm account for the bank), or 0 if none.
+func (r *FundRepository) FindParticipantRSDAccount(clientID uint, clientType string) (uint, error) {
+	q := r.db.Table("accounts").
+		Select("accounts.id").
+		Joins("JOIN currencies ON currencies.id = accounts.currency_id").
+		Where("currencies.kod = 'RSD' AND accounts.status = 'aktivan'")
+	if clientType == "client" {
+		q = q.Where("accounts.client_id = ?", clientID)
+	} else {
+		q = q.Joins("JOIN firmas ON firmas.id = accounts.firma_id").
+			Where("firmas.is_state = false AND accounts.podvrsta <> 'fondacija'")
+	}
+	var id uint
+	err := q.Limit(1).Scan(&id).Error
+	return id, err
 }
 
 // --- performance ---

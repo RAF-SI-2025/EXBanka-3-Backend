@@ -133,6 +133,35 @@ func (r *PortfolioRepository) RecordBuyFill(userID uint, userType string, assetI
 	})
 }
 
+// RecordBuyFillTx is the transaction-aware variant of RecordBuyFill. Used by
+// fund-service so dividend reinvestment can run inside the same transaction as
+// the cash debit.
+func RecordBuyFillTx(tx *gorm.DB, userID uint, userType string, assetID, accountID uint, filledQty float64, fillPrice float64) error {
+	var h models.PortfolioHoldingRecord
+	err := tx.Where("user_id = ? AND user_type = ? AND asset_id = ?", userID, userType, assetID).
+		First(&h).Error
+
+	now := time.Now().UTC()
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		h = models.PortfolioHoldingRecord{
+			UserID: userID, UserType: userType, AssetID: assetID, AccountID: accountID,
+			Quantity: filledQty, AvgBuyPrice: fillPrice, CreatedAt: now, UpdatedAt: now,
+		}
+		return tx.Create(&h).Error
+	}
+	if err != nil {
+		return err
+	}
+	newQty := h.Quantity + filledQty
+	newAvg := (h.Quantity*h.AvgBuyPrice + filledQty*fillPrice) / newQty
+	return tx.Model(&h).Updates(map[string]interface{}{
+		"quantity":      newQty,
+		"avg_buy_price": newAvg,
+		"account_id":    accountID,
+		"updated_at":    now,
+	}).Error
+}
+
 // RecordSellFill atomically decreases the holding quantity and accumulates
 // realized profit. Returns the realized profit for this fill.
 func (r *PortfolioRepository) RecordSellFill(userID uint, userType string, assetID uint, filledQty float64, sellPrice float64) (realizedProfit float64, err error) {

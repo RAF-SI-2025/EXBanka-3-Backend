@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
+	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/notify"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/repository"
 	"gorm.io/gorm"
 )
@@ -32,6 +33,21 @@ type FundService struct {
 	marketRepo    *repository.MarketRepository
 	orderRepo     *repository.OrderRepository
 	rateProvider  RateProviderInterface
+	dividendRepo  *repository.DividendRepository // optional; wired for fund dividends
+	notifier      *notify.Client                 // optional; best-effort in-app notifications
+}
+
+// WithDividendRepo wires the repository used to discover fund-held
+// dividend-paying holdings (Celina 4 fund dividends).
+func (s *FundService) WithDividendRepo(d *repository.DividendRepository) *FundService {
+	s.dividendRepo = d
+	return s
+}
+
+// WithNotifier wires the optional best-effort notification client.
+func (s *FundService) WithNotifier(n *notify.Client) *FundService {
+	s.notifier = n
+	return s
 }
 
 func NewFundService(
