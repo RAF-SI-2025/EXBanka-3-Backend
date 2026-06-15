@@ -16,10 +16,17 @@ import (
 type PortfolioHTTPHandler struct {
 	cfg          *config.Config
 	portfolioSvc *service.PortfolioService
+	dividendSvc  *service.DividendService
 }
 
 func NewPortfolioHTTPHandler(cfg *config.Config, portfolioSvc *service.PortfolioService) *PortfolioHTTPHandler {
 	return &PortfolioHTTPHandler{cfg: cfg, portfolioSvc: portfolioSvc}
+}
+
+// WithDividendService wires the dividend history / manual-run endpoints.
+func (h *PortfolioHTTPHandler) WithDividendService(d *service.DividendService) *PortfolioHTTPHandler {
+	h.dividendSvc = d
+	return h
 }
 
 // PortfolioCollection handles GET /api/v1/portfolio — summary view.
@@ -57,6 +64,12 @@ func (h *PortfolioHTTPHandler) PortfolioRoutes(w http.ResponseWriter, r *http.Re
 	}
 
 	parts := strings.Split(path, "/")
+
+	// /api/v1/portfolio/dividends[/run]
+	if parts[0] == "dividends" {
+		h.dividendRoutes(w, r, parts)
+		return
+	}
 
 	// /api/v1/portfolio/holdings
 	if parts[0] != "holdings" {
@@ -222,6 +235,116 @@ func (h *PortfolioHTTPHandler) setPublic(w http.ResponseWriter, r *http.Request,
 		"reservedQuantity": updated.ReservedQuantity,
 		"availableForOtc":  updated.AvailableForOTC(),
 	})
+}
+
+// dividendRoutes handles /api/v1/portfolio/dividends and .../dividends/run.
+func (h *PortfolioHTTPHandler) dividendRoutes(w http.ResponseWriter, r *http.Request, parts []string) {
+	if h.dividendSvc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "dividends unavailable"})
+		return
+	}
+	switch {
+	case len(parts) == 1 && r.Method == http.MethodGet:
+		h.listDividends(w, r)
+	case len(parts) == 2 && parts[1] == "run" && r.Method == http.MethodPost:
+		h.runDividends(w, r)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// listDividends returns the caller's own dividend payout history.
+func (h *PortfolioHTTPHandler) listDividends(w http.ResponseWriter, r *http.Request) {
+	claims, ok := requireAuthenticatedHTTP(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireTradingAccessHTTP(w, claims) {
+		return
+	}
+
+	userID, userType := callerIdentity(claims)
+	var assetID uint
+	if raw := strings.TrimSpace(r.URL.Query().Get("assetId")); raw != "" {
+		if v, err := strconv.ParseUint(raw, 10, 64); err == nil {
+			assetID = uint(v)
+		}
+	}
+
+	payouts, err := h.dividendSvc.ListPayoutsForUser(userID, userType, assetID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to load dividends"})
+		return
+	}
+
+	items := make([]dividendResponse, 0, len(payouts))
+	for _, p := range payouts {
+		items = append(items, dividendToResponse(p))
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"dividends": items, "count": len(items)})
+}
+
+// runDividends triggers a dividend distribution on demand (supervisor only).
+// Useful for demos/recovery; the cron normally runs it quarterly. Idempotent per
+// quarter, so a manual run after the automatic one is a no-op.
+func (h *PortfolioHTTPHandler) runDividends(w http.ResponseWriter, r *http.Request) {
+	claims, ok := requireAuthenticatedHTTP(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !isSupervisor(claims) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "supervisor access required"})
+		return
+	}
+
+	res, err := h.dividendSvc.DistributeForDate(time.Now().UTC())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"period":   res.Period,
+		"eligible": res.Eligible,
+		"paidOut":  res.PaidOut,
+		"skipped":  res.Skipped,
+		"failed":   res.Failed,
+	})
+}
+
+type dividendResponse struct {
+	ID               uint    `json:"id"`
+	AssetID          uint    `json:"assetId"`
+	Ticker           string  `json:"ticker"`
+	AccountID        uint    `json:"accountId"`
+	Quantity         float64 `json:"quantity"`
+	PricePerShare    float64 `json:"pricePerShare"`
+	DividendYield    float64 `json:"dividendYield"`
+	Currency         string  `json:"currency"`
+	GrossAmount      float64 `json:"grossAmount"`
+	CreditedAmount   float64 `json:"creditedAmount"`
+	CreditedCurrency string  `json:"creditedCurrency"`
+	TaxRSD           float64 `json:"taxRSD"`
+	Period           string  `json:"period"`
+	PaidAt           string  `json:"paidAt"`
+}
+
+func dividendToResponse(p models.DividendPayoutRecord) dividendResponse {
+	return dividendResponse{
+		ID:               p.ID,
+		AssetID:          p.AssetID,
+		Ticker:           p.Ticker,
+		AccountID:        p.AccountID,
+		Quantity:         p.Quantity,
+		PricePerShare:    p.PricePerShare,
+		DividendYield:    p.DividendYield,
+		Currency:         p.Currency,
+		GrossAmount:      p.GrossAmount,
+		CreditedAmount:   p.CreditedAmount,
+		CreditedCurrency: p.CreditedCurrency,
+		TaxRSD:           p.TaxRSD,
+		Period:           p.Period,
+		PaidAt:           p.PaidAt.UTC().Format(time.RFC3339),
+	}
 }
 
 // --- helpers ---

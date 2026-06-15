@@ -176,6 +176,7 @@ func (s *OtcService) CreateOffer(input CreateOtcOfferInput) (*models.OtcOfferRec
 	if err != nil {
 		return nil, err
 	}
+	s.recordNegotiationEntry(created, models.OtcNegotiationActionCreated, input.BuyerID, input.BuyerType, nil)
 	return created, nil
 }
 
@@ -242,6 +243,9 @@ func (s *OtcService) CounterOffer(input CounterOtcOfferInput) (*models.OtcOfferR
 		return nil, err
 	}
 
+	// `offer` holds the pre-counter terms; `updated` the new ones.
+	s.recordNegotiationEntry(updated, models.OtcNegotiationActionCountered, input.ModifiedByID, input.ModifiedByType, offer)
+
 	// Notify the counterparty about the new counter-offer terms.
 	recipientID, recipientType := otcOtherParty(updated, input.ModifiedByID, input.ModifiedByType)
 	emitOtcNotification(s.notifier, recipientID, recipientType, "OTC_COUNTER",
@@ -255,6 +259,7 @@ func (s *OtcService) CounterOffer(input CounterOtcOfferInput) (*models.OtcOfferR
 func (s *OtcService) DeclineOffer(offerID uint, sellerID uint, sellerType string) (*models.OtcOfferRecord, error) {
 	offer, err := s.updateOfferStatusForParticipant(offerID, sellerID, sellerType, models.OtcOfferStatusDeclined)
 	if err == nil && offer != nil {
+		s.recordNegotiationEntry(offer, models.OtcNegotiationActionDeclined, sellerID, sellerType, nil)
 		recipientID, recipientType := otcOtherParty(offer, sellerID, sellerType)
 		emitOtcNotification(s.notifier, recipientID, recipientType, "OTC_DECLINED",
 			"Ponuda odbijena",
@@ -266,6 +271,7 @@ func (s *OtcService) DeclineOffer(offerID uint, sellerID uint, sellerType string
 func (s *OtcService) CancelOffer(offerID uint, buyerID uint, buyerType string) (*models.OtcOfferRecord, error) {
 	offer, err := s.updateOfferStatusForParticipant(offerID, buyerID, buyerType, models.OtcOfferStatusCancelled)
 	if err == nil && offer != nil {
+		s.recordNegotiationEntry(offer, models.OtcNegotiationActionCancelled, buyerID, buyerType, nil)
 		recipientID, recipientType := otcOtherParty(offer, buyerID, buyerType)
 		emitOtcNotification(s.notifier, recipientID, recipientType, "OTC_CANCELLED",
 			"Ponuda povučena",
@@ -303,6 +309,8 @@ func (s *OtcService) AcceptOffer(offerID uint, userID uint, userType string) (*m
 		}
 		return nil, err
 	}
+
+	s.recordNegotiationEntry(offer, models.OtcNegotiationActionAccepted, userID, userType, nil)
 
 	// Notify the counterparty that the offer was accepted (contract created).
 	recipientID, recipientType := otcOtherParty(offer, userID, userType)
@@ -459,6 +467,67 @@ func (s *OtcService) GetOfferForParticipant(offerID uint, userID uint, userType 
 		return nil, ErrOtcOfferNotFound
 	}
 	return offer, nil
+}
+
+// recordNegotiationEntry appends one step to an offer's negotiation history.
+// Best-effort and nil-safe: a failure here is logged but never fails the
+// underlying OTC action. When prev is non-nil (a counter-offer) the pre-change
+// terms are captured alongside the new ones.
+func (s *OtcService) recordNegotiationEntry(offer *models.OtcOfferRecord, action string, actorID uint, actorType string, prev *models.OtcOfferRecord) {
+	if offer == nil {
+		return
+	}
+	entry := &models.OtcNegotiationEntryRecord{
+		OfferID:        offer.ID,
+		Action:         action,
+		ActorID:        actorID,
+		ActorType:      actorType,
+		Amount:         offer.Amount,
+		PricePerStock:  offer.PricePerStock,
+		Premium:        offer.Premium,
+		SettlementDate: offer.SettlementDate,
+	}
+	if prev != nil {
+		amount, price, premium, settle := prev.Amount, prev.PricePerStock, prev.Premium, prev.SettlementDate
+		entry.PrevAmount = &amount
+		entry.PrevPricePerStock = &price
+		entry.PrevPremium = &premium
+		entry.PrevSettlementDate = &settle
+	}
+	if err := s.otcRepo.AppendNegotiationEntry(entry); err != nil {
+		slog.Error("otc: failed to record negotiation entry", "offerID", offer.ID, "action", action, "error", err)
+	}
+}
+
+// ListNegotiations returns the negotiation threads (offers) the caller took part
+// in, for the history page. Supports status, date-range and counterparty filters.
+func (s *OtcService) ListNegotiations(userID uint, userType, status string, from, to *time.Time, counterpartyID uint) ([]models.OtcOfferRecord, error) {
+	if err := validateOfferStatusFilter(status); err != nil {
+		return nil, err
+	}
+	return s.otcRepo.ListNegotiations(userID, userType, repository.NegotiationFilter{
+		Status:         status,
+		From:           from,
+		To:             to,
+		CounterpartyID: counterpartyID,
+	})
+}
+
+// GetNegotiationHistory returns the full timeline for one offer, but only if the
+// caller is a participant in it.
+func (s *OtcService) GetNegotiationHistory(offerID, userID uint, userType string) (*models.OtcOfferRecord, []models.OtcNegotiationEntryRecord, error) {
+	offer, err := s.otcRepo.GetOfferByID(offerID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if offer == nil || !isOfferParticipant(*offer, userID, userType) {
+		return nil, nil, ErrOtcOfferNotFound
+	}
+	entries, err := s.otcRepo.ListNegotiationEntries(offerID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return offer, entries, nil
 }
 
 func isOfferParticipant(offer models.OtcOfferRecord, userID uint, userType string) bool {

@@ -94,6 +94,9 @@ func main() {
 	fundRepo := repository.NewFundRepository(db)
 	fundSvc := service.NewFundService(fundRepo, portfolioRepo, marketRepo, orderRepo, rateProvider)
 
+	dividendRepo := repository.NewDividendRepository(db)
+	dividendSvc := service.NewDividendService(dividendRepo, orderRepo, taxSvc, rateProvider)
+
 	// Inter-bank protocol wiring (Celina 5). The registry parses
 	// PARTNER_BANKS_JSON at startup and is the routing/auth source of
 	// truth for every /interbank request, inbound or outbound.
@@ -132,7 +135,8 @@ func main() {
 
 	emailSvc := service.NewSMTPEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPFrom)
 	notifier := notify.NewClient(cfg.NotificationServiceURL, cfg.InternalAPIKey)
-	cronScheduler := service.StartCronJobs(db, portfolioSvc, rateProvider, sagaRetryRunner, fundSvc, ibReconcile, ibPublicStockCache, emailSvc, notifier)
+	dividendSvc = dividendSvc.WithNotifier(notifier)
+	cronScheduler := service.StartCronJobs(db, portfolioSvc, rateProvider, sagaRetryRunner, fundSvc, dividendSvc, ibReconcile, ibPublicStockCache, emailSvc, notifier)
 
 	go func() {
 		slog.Info("Running market data seed in background...")
@@ -150,7 +154,7 @@ func main() {
 
 	orderSvc := service.NewOrderService(orderRepo, marketRepo, rateProvider).WithNotifier(notifier)
 	orderH := handler.NewOrderHTTPHandler(cfg, orderSvc, db).WithFundService(fundSvc).WithNotifier(notifier)
-	portfolioH := handler.NewPortfolioHTTPHandler(cfg, portfolioSvc)
+	portfolioH := handler.NewPortfolioHTTPHandler(cfg, portfolioSvc).WithDividendService(dividendSvc)
 	otcSvc := service.NewOtcService(portfolioRepo, otcRepo).WithOrchestrator(sagaOrchestrator).WithNotifier(notifier)
 	otcH := handler.NewOtcHTTPHandler(cfg, otcSvc).WithSagaQuerier(sagaRepo)
 

@@ -343,6 +343,64 @@ func (r *OtcRepository) UpdateContractStatus(id uint, status string) error {
 	}).Error
 }
 
+// AppendNegotiationEntry records one immutable step in an offer's negotiation
+// history (created / countered / accepted / declined / cancelled).
+func (r *OtcRepository) AppendNegotiationEntry(entry *models.OtcNegotiationEntryRecord) error {
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = time.Now().UTC()
+	}
+	return r.db.Create(entry).Error
+}
+
+// ListNegotiationEntries returns an offer's full negotiation timeline, oldest
+// first, so the history page can render the back-and-forth in order.
+func (r *OtcRepository) ListNegotiationEntries(offerID uint) ([]models.OtcNegotiationEntryRecord, error) {
+	var entries []models.OtcNegotiationEntryRecord
+	if err := r.db.Where("offer_id = ?", offerID).
+		Order("created_at ASC, id ASC").
+		Find(&entries).Error; err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+// NegotiationFilter scopes the negotiation-history list.
+type NegotiationFilter struct {
+	Status         string     // "" = any
+	From           *time.Time // last_modified >= From
+	To             *time.Time // last_modified <= To
+	CounterpartyID uint       // 0 = any; otherwise the other party's id
+}
+
+// ListNegotiations returns the offers (negotiation threads) the user took part
+// in, filtered for the history page. Unlike ListOffersForParticipant this also
+// supports date and counterparty filters.
+func (r *OtcRepository) ListNegotiations(userID uint, userType string, f NegotiationFilter) ([]models.OtcOfferRecord, error) {
+	q := r.offerPreloads(r.db).
+		Where("(buyer_id = ? AND buyer_type = ?) OR (seller_id = ? AND seller_type = ?)",
+			userID, userType, userID, userType)
+	if f.Status != "" {
+		q = q.Where("status = ?", f.Status)
+	}
+	if f.From != nil {
+		q = q.Where("last_modified >= ?", f.From.UTC())
+	}
+	if f.To != nil {
+		q = q.Where("last_modified <= ?", f.To.UTC())
+	}
+	if f.CounterpartyID != 0 {
+		q = q.Where(
+			"(buyer_id = ? AND buyer_type = ? AND seller_id = ?) OR (seller_id = ? AND seller_type = ? AND buyer_id = ?)",
+			userID, userType, f.CounterpartyID, userID, userType, f.CounterpartyID)
+	}
+
+	var offers []models.OtcOfferRecord
+	if err := q.Order("last_modified DESC, id DESC").Find(&offers).Error; err != nil {
+		return nil, err
+	}
+	return offers, nil
+}
+
 func (r *OtcRepository) offerPreloads(db *gorm.DB) *gorm.DB {
 	return db.
 		Preload("StockListing").
