@@ -52,6 +52,24 @@ func (r *DividendRepository) ListDividendEligibleHoldings() ([]DividendEligibleH
 	return rows, err
 }
 
+// ListFundDividendEligibleHoldings returns every positive fund-owned stock
+// holding whose listing pays a dividend. The fund-dividend mechanism (Celina 4)
+// processes these; the client/bank payout above deliberately skips them.
+func (r *DividendRepository) ListFundDividendEligibleHoldings() ([]DividendEligibleHolding, error) {
+	var rows []DividendEligibleHolding
+	err := r.db.Table("portfolio_holdings AS ph").
+		Select(`ph.id AS holding_id, ph.user_id, ph.user_type, ph.asset_id,
+			ph.account_id, ph.quantity, ml.ticker, ml.price,
+			me.currency, s.dividend_yield`).
+		Joins("JOIN market_listings ml ON ml.id = ph.asset_id AND ml.type = 'stock'").
+		Joins("JOIN market_exchanges me ON me.id = ml.exchange_id").
+		Joins("JOIN stocks s ON s.listing_id = ml.id AND s.dividend_yield > 0").
+		Where("ph.quantity > 0 AND ph.user_type = 'fund'").
+		Order("ph.id ASC").
+		Scan(&rows).Error
+	return rows, err
+}
+
 // PayoutExists reports whether a payout has already been recorded for this
 // (asset, holder, period) — the idempotency guard for re-runs of one quarter.
 func (r *DividendRepository) PayoutExists(assetID, userID uint, userType, period string) (bool, error) {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/config"
 	"github.com/RAF-SI-2025/EXBanka-3-Backend/exchange-service/internal/models"
@@ -59,6 +60,18 @@ func (h *FundHTTPHandler) FundRoutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.listMyPositions(w, r)
+	case len(parts) == 1 && parts[0] == "benchmark":
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.getBenchmark(w, r)
+	case len(parts) == 2 && parts[0] == "dividends" && parts[1] == "run":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.runFundDividends(w, r)
 	case len(parts) == 1:
 		id, err := strconv.ParseUint(parts[0], 10, 64)
 		if err != nil {
@@ -107,6 +120,24 @@ func (h *FundHTTPHandler) FundRoutes(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			h.validateFundOrder(w, r, uint(id))
+		case "statistics":
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			h.getStatistics(w, r, uint(id))
+		case "dividends":
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			h.listFundDividends(w, r, uint(id))
+		case "dividend-policy":
+			if r.Method != http.MethodPut {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			h.setDividendPolicy(w, r, uint(id))
 		default:
 			http.NotFound(w, r)
 		}
@@ -135,7 +166,13 @@ func (h *FundHTTPHandler) listFunds(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "neuspesan izracun fonda"})
 			return
 		}
-		items = append(items, summariseToJSON(summary))
+		item := summariseToJSON(summary)
+		// Statistics columns for the discovery page (Celina 4). Best-effort: a
+		// failure leaves the fund without stats rather than failing the list.
+		if stats, err := h.svc.ComputeStatistics(funds[i].ID); err == nil {
+			item["statistics"] = statisticsToJSON(stats)
+		}
+		items = append(items, item)
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"funds": items, "count": len(items)})
 }
@@ -435,6 +472,113 @@ func (h *FundHTTPHandler) validateFundOrder(w http.ResponseWriter, r *http.Reque
 // fundParticipantIdentity maps a JWT into (clientID, clientType) for the
 // fund domain. Clients always invest as themselves; supervisors can pass
 // `asBank=true` to invest on behalf of the bank (clientID=0, type="bank").
+func (h *FundHTTPHandler) getStatistics(w http.ResponseWriter, r *http.Request, fundID uint) {
+	if _, ok := requireAuthenticatedHTTP(w, r, h.cfg); !ok {
+		return
+	}
+	if _, err := h.svc.GetFund(fundID); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "fond nije pronadjen"})
+		return
+	}
+	stats, err := h.svc.ComputeStatistics(fundID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"statistics": statisticsToJSON(stats)})
+}
+
+func (h *FundHTTPHandler) getBenchmark(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireAuthenticatedHTTP(w, r, h.cfg); !ok {
+		return
+	}
+	points, err := h.svc.AverageFundBenchmark()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"benchmark": points, "count": len(points)})
+}
+
+func (h *FundHTTPHandler) listFundDividends(w http.ResponseWriter, r *http.Request, fundID uint) {
+	if _, ok := requireAuthenticatedHTTP(w, r, h.cfg); !ok {
+		return
+	}
+	dividends, err := h.svc.ListFundDividends(fundID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+		return
+	}
+	items := make([]map[string]interface{}, 0, len(dividends))
+	for _, d := range dividends {
+		items = append(items, map[string]interface{}{
+			"id":               d.ID,
+			"assetId":          d.AssetID,
+			"ticker":           d.Ticker,
+			"period":           d.Period,
+			"quantity":         d.Quantity,
+			"grossRSD":         d.GrossRSD,
+			"policy":           d.Policy,
+			"reinvestedShares": d.ReinvestedShares,
+			"reinvestedRSD":    d.ReinvestedRSD,
+			"distributedRSD":   d.DistributedRSD,
+			"paidAt":           d.PaidAt.UTC().Format(time.RFC3339),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"dividends": items, "count": len(items)})
+}
+
+func (h *FundHTTPHandler) setDividendPolicy(w http.ResponseWriter, r *http.Request, fundID uint) {
+	claims, ok := requireAuthenticatedHTTP(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireSupervisorHTTP(w, claims) {
+		return
+	}
+	var body struct {
+		Policy string `json:"policy"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "neispravan zahtev"})
+		return
+	}
+	fund, err := h.svc.SetDividendPolicy(fundID, claims.EmployeeID, body.Policy)
+	if err != nil {
+		if errors.Is(err, service.ErrFundNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "fond nije pronadjen"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"fundId": fund.ID, "dividendPolicy": fund.DividendPolicy})
+}
+
+// runFundDividends triggers a fund-dividend distribution on demand (supervisor
+// only). Mirrors the client/bank manual trigger; idempotent per quarter.
+func (h *FundHTTPHandler) runFundDividends(w http.ResponseWriter, r *http.Request) {
+	claims, ok := requireAuthenticatedHTTP(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireSupervisorHTTP(w, claims) {
+		return
+	}
+	res, err := h.svc.DistributeFundDividends(time.Now().UTC())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"period":    res.Period,
+		"eligible":  res.Eligible,
+		"processed": res.Processed,
+		"skipped":   res.Skipped,
+		"failed":    res.Failed,
+	})
+}
+
 func fundParticipantIdentity(claims *util.Claims, asBank bool) (uint, string, error) {
 	if asBank {
 		if claims.TokenSource != "employee" {
@@ -466,6 +610,7 @@ func summariseToJSON(s *service.FundSummary) map[string]interface{} {
 		"managerId":          s.Fund.ManagerID,
 		"accountId":          s.Fund.AccountID,
 		"datumKreiranja":     s.Fund.DatumKreiranja.Format("2006-01-02"),
+		"dividendPolicy":     s.Fund.DividendPolicy,
 		"fundValueRSD":       s.FundValueRSD,
 		"liquidCashRSD":      s.LiquidCashRSD,
 		"holdingsValueRSD":   s.HoldingsValueRSD,
@@ -473,5 +618,16 @@ func summariseToJSON(s *service.FundSummary) map[string]interface{} {
 		"profitRSD":          s.ProfitRSD,
 		"participantsCount":  s.ParticipantsCount,
 		"withdrawalCommRate": s.WithdrawalCommRate,
+	}
+}
+
+func statisticsToJSON(st service.FundStatistics) map[string]interface{} {
+	return map[string]interface{}{
+		"available":           st.Available,
+		"monthsOfData":        st.MonthsOfData,
+		"annualizedReturn":    st.AnnualizedReturn,
+		"volatility":          st.Volatility,
+		"rewardToVariability": st.RewardToVariability,
+		"maxDrawdown":         st.MaxDrawdown,
 	}
 }

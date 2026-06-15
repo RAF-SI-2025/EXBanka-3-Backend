@@ -137,11 +137,23 @@ func StartCronJobs(
 			res, derr := dividendSvc.DistributeForDate(now)
 			if derr != nil {
 				slog.Error("Quarterly dividend distribution failed", "error", derr)
-				return
+			} else {
+				slog.Info("Quarterly dividend distribution finished",
+					"period", res.Period, "eligible", res.Eligible,
+					"paid", res.PaidOut, "skipped", res.Skipped, "failed", res.Failed)
 			}
-			slog.Info("Quarterly dividend distribution finished",
-				"period", res.Period, "eligible", res.Eligible,
-				"paid", res.PaidOut, "skipped", res.Skipped, "failed", res.Failed)
+			// Fund-held stocks pay dividends too (Celina 4) — distributed into the
+			// fund per its policy. Runs after the client/bank payout above.
+			if fundSvc != nil {
+				fres, ferr := fundSvc.DistributeFundDividends(now)
+				if ferr != nil {
+					slog.Error("Quarterly fund dividend distribution failed", "error", ferr)
+				} else {
+					slog.Info("Quarterly fund dividend distribution finished",
+						"period", fres.Period, "eligible", fres.Eligible,
+						"processed", fres.Processed, "skipped", fres.Skipped, "failed", fres.Failed)
+				}
+			}
 		})
 		if err != nil {
 			slog.Error("Failed to add dividend payout cron job", "error", err)

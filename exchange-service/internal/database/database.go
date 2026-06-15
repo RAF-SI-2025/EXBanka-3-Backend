@@ -57,6 +57,7 @@ func Migrate(db *gorm.DB) error {
 			&models.ClientFundTransactionRecord{},
 			&models.ClientFundPositionRecord{},
 			&models.FundPerformanceHistoryRecord{},
+			&models.FundDividendRecord{},
 			&models.InterbankInboundMessage{},
 			&models.InterbankOtcNegotiation{},
 			&models.InterbankPendingTx{},
