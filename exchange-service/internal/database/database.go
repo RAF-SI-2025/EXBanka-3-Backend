@@ -47,6 +47,8 @@ func Migrate(db *gorm.DB) error {
 			&models.PortfolioHoldingRecord{},
 			&models.OtcOfferRecord{},
 			&models.OtcContractRecord{},
+			&models.OtcNegotiationEntryRecord{},
+			&models.DividendPayoutRecord{},
 			&models.TaxRecord{},
 			&models.SagaTransactionRecord{},
 			&models.SagaStepRecord{},

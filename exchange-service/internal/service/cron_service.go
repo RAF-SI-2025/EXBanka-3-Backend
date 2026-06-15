@@ -27,6 +27,7 @@ func StartCronJobs(
 	rateProvider RateProviderInterface,
 	sagaRetry *SagaRetryRunner,
 	fundSvc *FundService,
+	dividendSvc *DividendService,
 	interbankReconcile *InterbankReconcileRunner,
 	publicStockCache *PublicStockCacheRunner,
 	emailSvc EmailSender,
@@ -121,6 +122,30 @@ func StartCronJobs(
 	})
 	if err != nil {
 		slog.Error("Failed to add tax collection cron job", "error", err)
+	}
+
+	// Quarterly dividend payout: a daily 23:30 UTC tick that only acts on the
+	// last working day of March/June/September/December (§Celina 3). Idempotent
+	// per quarter, so a missed or duplicated tick never double-pays.
+	if dividendSvc != nil {
+		_, err = c.AddFunc("30 23 * * *", func() {
+			now := time.Now().UTC()
+			if !IsLastWorkingDayOfQuarter(now) {
+				return
+			}
+			slog.Info("Starting quarterly dividend distribution", "period", QuarterPeriod(now))
+			res, derr := dividendSvc.DistributeForDate(now)
+			if derr != nil {
+				slog.Error("Quarterly dividend distribution failed", "error", derr)
+				return
+			}
+			slog.Info("Quarterly dividend distribution finished",
+				"period", res.Period, "eligible", res.Eligible,
+				"paid", res.PaidOut, "skipped", res.Skipped, "failed", res.Failed)
+		})
+		if err != nil {
+			slog.Error("Failed to add dividend payout cron job", "error", err)
+		}
 	}
 
 	// Daily fund performance snapshot: runs at 23:55 UTC every day.

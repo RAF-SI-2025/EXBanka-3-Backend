@@ -45,6 +45,23 @@ func (h *OtcHTTPHandler) OtcRoutes(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(path, "/")
 
 	switch {
+	case len(parts) == 1 && parts[0] == "negotiations":
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.listNegotiations(w, r)
+	case len(parts) == 3 && parts[0] == "offers" && parts[2] == "history":
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		offerID, err := strconv.ParseUint(parts[1], 10, 64)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid offer id"})
+			return
+		}
+		h.negotiationHistory(w, r, uint(offerID))
 	case len(parts) == 1 && parts[0] == "public-stocks":
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -493,6 +510,141 @@ func (h *OtcHTTPHandler) counterOffer(w http.ResponseWriter, r *http.Request, of
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{"offer": otcOfferToResponse(*offer)})
+}
+
+// listNegotiations handles GET /api/v1/otc/negotiations — the caller's
+// negotiation history with optional status / from / to / counterparty filters.
+func (h *OtcHTTPHandler) listNegotiations(w http.ResponseWriter, r *http.Request) {
+	claims, ok := requireAuthenticatedHTTP(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireTradingAccessHTTP(w, claims) {
+		return
+	}
+
+	userID, userType := callerIdentity(claims)
+	q := r.URL.Query()
+	status := strings.TrimSpace(q.Get("status"))
+	from := parseHistoryDate(q.Get("from"), false)
+	to := parseHistoryDate(q.Get("to"), true)
+	var counterpartyID uint
+	if raw := strings.TrimSpace(q.Get("counterparty")); raw != "" {
+		if v, err := strconv.ParseUint(raw, 10, 64); err == nil {
+			counterpartyID = uint(v)
+		}
+	}
+
+	offers, err := h.svc.ListNegotiations(userID, userType, status, from, to, counterpartyID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+
+	items := make([]otcOfferResponse, 0, len(offers))
+	for _, offer := range offers {
+		items = append(items, otcOfferToResponse(offer))
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"negotiations": items,
+		"count":        len(items),
+		"status":       status,
+	})
+}
+
+// negotiationHistory handles GET /api/v1/otc/offers/{id}/history — the full
+// counter-offer timeline for one offer (participant only).
+func (h *OtcHTTPHandler) negotiationHistory(w http.ResponseWriter, r *http.Request, offerID uint) {
+	claims, ok := requireAuthenticatedHTTP(w, r, h.cfg)
+	if !ok {
+		return
+	}
+	if !requireTradingAccessHTTP(w, claims) {
+		return
+	}
+
+	userID, userType := callerIdentity(claims)
+	offer, entries, err := h.svc.GetNegotiationHistory(offerID, userID, userType)
+	if err != nil {
+		if errors.Is(err, service.ErrOtcOfferNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "offer not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to load negotiation history"})
+		return
+	}
+
+	items := make([]negotiationEntryResponse, 0, len(entries))
+	for _, e := range entries {
+		items = append(items, negotiationEntryToResponse(e))
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"offer":   otcOfferToResponse(*offer),
+		"entries": items,
+		"count":   len(items),
+	})
+}
+
+// parseHistoryDate parses a YYYY-MM-DD (or RFC3339) query param. When endOfDay
+// is true a bare date is bumped to 23:59:59 so an inclusive `to` filter covers
+// the whole day. Returns nil for empty/invalid input.
+func parseHistoryDate(raw string, endOfDay bool) *time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		u := t.UTC()
+		return &u
+	}
+	if t, err := time.Parse("2006-01-02", raw); err == nil {
+		if endOfDay {
+			t = t.Add(24*time.Hour - time.Second)
+		}
+		u := t.UTC()
+		return &u
+	}
+	return nil
+}
+
+type negotiationEntryResponse struct {
+	ID                 uint     `json:"id"`
+	OfferID            uint     `json:"offerId"`
+	Action             string   `json:"action"`
+	ActorID            uint     `json:"actorId"`
+	ActorType          string   `json:"actorType"`
+	Amount             float64  `json:"amount"`
+	PricePerStock      float64  `json:"pricePerStock"`
+	Premium            float64  `json:"premium"`
+	SettlementDate     string   `json:"settlementDate"`
+	PrevAmount         *float64 `json:"prevAmount,omitempty"`
+	PrevPricePerStock  *float64 `json:"prevPricePerStock,omitempty"`
+	PrevPremium        *float64 `json:"prevPremium,omitempty"`
+	PrevSettlementDate *string  `json:"prevSettlementDate,omitempty"`
+	CreatedAt          string   `json:"createdAt"`
+}
+
+func negotiationEntryToResponse(e models.OtcNegotiationEntryRecord) negotiationEntryResponse {
+	resp := negotiationEntryResponse{
+		ID:                e.ID,
+		OfferID:           e.OfferID,
+		Action:            e.Action,
+		ActorID:           e.ActorID,
+		ActorType:         e.ActorType,
+		Amount:            e.Amount,
+		PricePerStock:     e.PricePerStock,
+		Premium:           e.Premium,
+		SettlementDate:    e.SettlementDate.UTC().Format("2006-01-02"),
+		PrevAmount:        e.PrevAmount,
+		PrevPricePerStock: e.PrevPricePerStock,
+		PrevPremium:       e.PrevPremium,
+		CreatedAt:         e.CreatedAt.UTC().Format(time.RFC3339),
+	}
+	if e.PrevSettlementDate != nil {
+		s := e.PrevSettlementDate.UTC().Format("2006-01-02")
+		resp.PrevSettlementDate = &s
+	}
+	return resp
 }
 
 type publicOtcStockResponse struct {
