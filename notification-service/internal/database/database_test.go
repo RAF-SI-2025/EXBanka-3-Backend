@@ -40,3 +40,21 @@ func TestMigrate(t *testing.T) {
 		t.Errorf("second migrate: %v", err)
 	}
 }
+
+// TestMigrate_Error covers the migration-failure wrap: closing the underlying
+// connection pool makes the transaction (and thus AutoMigrate) fail.
+func TestMigrate_Error(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:notif_db_migrate_err?mode=memory"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("db handle: %v", err)
+	}
+	_ = sqlDB.Close()
+
+	if err := Migrate(db); err == nil {
+		t.Error("expected migrate error on a closed connection pool")
+	}
+}
