@@ -153,7 +153,7 @@ type ActuaryProfile struct {
 func (r *OrderRepository) GetActuaryProfile(employeeID uint) (*ActuaryProfile, error) {
 	var profile ActuaryProfile
 	err := r.db.Table("actuary_profiles").
-		Select("employee_id, trading_limit as limit, used_limit, need_approval").
+		Select(`employee_id, trading_limit as "limit", used_limit, need_approval`).
 		Where("employee_id = ?", employeeID).
 		First(&profile).Error
 	if err != nil {
