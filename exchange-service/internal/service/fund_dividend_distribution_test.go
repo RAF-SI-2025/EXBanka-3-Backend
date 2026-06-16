@@ -30,6 +30,39 @@ func holdingQty(t *testing.T, db *gorm.DB, fundID, assetID uint) float64 {
 	return qty
 }
 
+func TestFundService_DistributeFundDividends_NoRepoAndSkips(t *testing.T) {
+	db := openDivTestDB(t, "fund_div_skips")
+
+	// No dividend repo wired -> error.
+	bare := service.NewFundService(
+		repository.NewFundRepository(db),
+		repository.NewPortfolioRepository(db),
+		repository.NewMarketRepository(db),
+		repository.NewOrderRepository(db),
+		&mockRateProv{rates: map[string]float64{"USD:RSD": 100}},
+	)
+	if _, err := bare.DistributeFundDividends(time.Now().UTC()); err == nil {
+		t.Error("expected error when dividend repo is not wired")
+	}
+
+	// Negligible-gross fund holding -> skipped.
+	svc := newFundSvc(db)
+	fund, err := svc.CreateFund(service.CreateFundInput{Naziv: "Skip Fund", Opis: "x", MinimalniUlog: 1000, ManagerID: 6})
+	if err != nil {
+		t.Fatalf("CreateFund: %v", err)
+	}
+	tiny := seedDivStock(t, db, "FTN", "USD", 0.0001, 0.0001)
+	seedHolding(t, db, fund.ID, "fund", tiny, 0.01, fund.AccountID)
+
+	res, err := svc.DistributeFundDividends(time.Now().UTC())
+	if err != nil {
+		t.Fatalf("DistributeFundDividends: %v", err)
+	}
+	if res.Processed != 0 || res.Skipped < 1 {
+		t.Errorf("expected the negligible holding skipped, got %+v", res)
+	}
+}
+
 func TestFundService_DistributeFundDividends_Reinvest(t *testing.T) {
 	db := openDivTestDB(t, "fund_div_reinvest")
 	svc := newFundSvc(db)
