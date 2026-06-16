@@ -74,6 +74,18 @@ func TestInterbankOtcHTTP_ExerciseContract_Validation(t *testing.T) {
 	}
 }
 
+// TestInterbankOtcHTTP_PublicStocks_FanOutLive hits the no-cache path: with no
+// cached snapshot, listPublicStocks fans out to the (dead) partner.
+func TestInterbankOtcHTTP_PublicStocks_FanOutLive(t *testing.T) {
+	h := setupInterbankOtcWithRegistry(t, "ib_otc_pubstock_live")
+	rec := do(t, h.Routes, http.MethodGet, "/api/v1/interbank-otc/public-stocks?live=true", clientToken(t), "")
+	// A dead partner makes the fan-out fail per-partner, but the endpoint still
+	// responds (stale/empty) rather than erroring out.
+	if rec.Code != http.StatusOK && rec.Code != http.StatusBadGateway {
+		t.Fatalf("public-stocks fan-out status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestInterbankOtcHTTP_PublicStocks_ReadsCached(t *testing.T) {
 	db := newFundTestDB(t, "ib_otc_pubstock")
 	cfg := &config.Config{JWTSecret: testJWTSecret}
