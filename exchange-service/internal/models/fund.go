@@ -97,9 +97,11 @@ func (ClientFundPositionRecord) TableName() string { return "client_fund_positio
 // FundPerformanceHistoryRecord stores a daily snapshot of the fund's total
 // value (cash + market value of securities, in RSD).
 type FundPerformanceHistoryRecord struct {
-	ID        uint      `gorm:"primaryKey"`
-	FundID    uint      `gorm:"column:fund_id;not null;index:idx_fund_perf_fund_date"`
-	Date      time.Time `gorm:"type:date;not null;index:idx_fund_perf_fund_date"`
+	ID uint `gorm:"primaryKey"`
+	// (fund_id, date) is unique: one snapshot per fund per day. The unique index
+	// is also what SavePerformanceSnapshot's ON CONFLICT upsert targets.
+	FundID    uint      `gorm:"column:fund_id;not null;uniqueIndex:idx_fund_perf_fund_date"`
+	Date      time.Time `gorm:"type:date;not null;uniqueIndex:idx_fund_perf_fund_date"`
 	FundValue float64   `gorm:"column:fund_value;not null"`
 	CreatedAt time.Time
 }
