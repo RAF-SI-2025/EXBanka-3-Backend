@@ -229,6 +229,76 @@ func TestPriceAlert_DeleteNotFound(t *testing.T) {
 	}
 }
 
+// TestPriceAlert_CreateValidationBranches covers the 400 branches of create:
+// malformed body, missing ticker, missing threshold, and missing email.
+func TestPriceAlert_CreateValidationBranches(t *testing.T) {
+	db := newTestDB(t, "pa_create_400s")
+	h := setupAlertHandler(t, db)
+	tok := clientTokenWithEmail(t)
+
+	// Malformed JSON body.
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/price-alerts", bytes.NewBufferString("{"))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.Collection(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("malformed body: want 400, got %d", rr.Code)
+	}
+
+	// Missing ticker.
+	if rr := doAlertRequest(t, h, http.MethodPost, "/api/v1/price-alerts", tok,
+		map[string]interface{}{"ticker": "", "condition": "ABOVE", "threshold": 10.0}); rr.Code != http.StatusBadRequest {
+		t.Errorf("missing ticker: want 400, got %d", rr.Code)
+	}
+
+	// Non-positive threshold.
+	if rr := doAlertRequest(t, h, http.MethodPost, "/api/v1/price-alerts", tok,
+		map[string]interface{}{"ticker": "AAPL", "condition": "ABOVE", "threshold": 0.0}); rr.Code != http.StatusBadRequest {
+		t.Errorf("zero threshold: want 400, got %d", rr.Code)
+	}
+
+	// Token without an email → 400.
+	noEmail := makeToken(t, util.Claims{
+		ClientID: 100, TokenSource: "client", TokenType: "access",
+		Permissions: []string{models.PermClientTrading, models.PermClientBasic},
+	})
+	if rr := doAlertRequest(t, h, http.MethodPost, "/api/v1/price-alerts", noEmail,
+		map[string]interface{}{"ticker": "AAPL", "condition": "ABOVE", "threshold": 10.0}); rr.Code != http.StatusBadRequest {
+		t.Errorf("no email: want 400, got %d", rr.Code)
+	}
+}
+
+// TestPriceAlert_InvalidID covers the non-numeric id branch of Routes.
+func TestPriceAlert_InvalidID(t *testing.T) {
+	db := newTestDB(t, "pa_bad_id")
+	h := setupAlertHandler(t, db)
+	if rr := doAlertRequest(t, h, http.MethodDelete, "/api/v1/price-alerts/not-a-number", clientTokenWithEmail(t), nil); rr.Code != http.StatusBadRequest {
+		t.Errorf("invalid id: want 400, got %d", rr.Code)
+	}
+}
+
+// TestPriceAlert_EmployeeOwnsAlert covers the employee branch of alertCaller.
+func TestPriceAlert_EmployeeOwnsAlert(t *testing.T) {
+	db := newTestDB(t, "pa_employee")
+	h := setupAlertHandler(t, db)
+	empTok := makeToken(t, util.Claims{
+		EmployeeID: 5, TokenSource: "employee", TokenType: "access",
+		Email:       "agent@test.com",
+		Permissions: []string{models.PermEmployeeAgent},
+	})
+	rr := doAlertRequest(t, h, http.MethodPost, "/api/v1/price-alerts", empTok,
+		map[string]interface{}{"ticker": "AAPL", "condition": "BELOW", "threshold": 5.0})
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("employee create: want 201, got %d — body: %s", rr.Code, rr.Body.String())
+	}
+	var alert models.PriceAlert
+	_ = json.NewDecoder(rr.Body).Decode(&alert)
+	if alert.UserID != 5 || alert.UserType != "employee" {
+		t.Errorf("employee alert owner: got (%d,%s)", alert.UserID, alert.UserType)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Cron / CheckPriceAlerts tests
 // ---------------------------------------------------------------------------

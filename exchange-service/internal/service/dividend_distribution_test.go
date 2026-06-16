@@ -156,6 +156,33 @@ func TestDividendService_DistributeForDate_BankUntaxedAndFundExcluded(t *testing
 	}
 }
 
+// TestDividendService_DistributeForDate_SkipBranches covers the negligible-gross
+// skip and the no-usable-account skip branches.
+func TestDividendService_DistributeForDate_SkipBranches(t *testing.T) {
+	db := openDivTestDB(t, "div_dist_skips")
+	assetID := seedDivStock(t, db, "DVS", "USD", 100, 0.04)
+
+	// Negligible gross: 0.0001 * 100 * 0.01 ≈ tiny -> skipped (<=0.005).
+	tiny := seedDivStock(t, db, "DTN", "USD", 0.01, 0.0001)
+	db.Exec(`INSERT INTO accounts (id, currency_id, status, client_id) VALUES (60, 2, 'aktivan', 9)`)
+	seedHolding(t, db, 9, "client", tiny, 0.01, 60)
+
+	// Holder with no resolvable account -> skipped (account_id 0, no accounts row).
+	seedHolding(t, db, 8, "client", assetID, 100, 0)
+
+	svc := newDividendSvc(db)
+	res, err := svc.DistributeForDate(time.Now().UTC())
+	if err != nil {
+		t.Fatalf("DistributeForDate: %v", err)
+	}
+	if res.PaidOut != 0 {
+		t.Errorf("expected nothing paid out, got %+v", res)
+	}
+	if res.Skipped < 2 {
+		t.Errorf("expected at least 2 skips (tiny + no-account), got %+v", res)
+	}
+}
+
 // TestDividendService_WithNotifier exercises the WithNotifier wiring and the
 // emit branch of notifyHolder. The notifier points at a dead endpoint; emits are
 // fire-and-forget best-effort, so the distribution must still succeed.

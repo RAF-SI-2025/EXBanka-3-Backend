@@ -51,6 +51,12 @@ func TestStartCronJobs_AllDepsWired(t *testing.T) {
 	if c == nil {
 		t.Fatal("StartCronJobs returned nil")
 	}
+	// Run every scheduled job body once so the closures (price refresh, order
+	// executor, OTC expiry/reminders, SAGA retry, dividends, tax, fund snapshot,
+	// interbank reconcile/public-stock) are exercised rather than only registered.
+	for _, e := range c.Entries() {
+		e.WrappedJob.Run()
+	}
 	c.Stop()
 }
 
