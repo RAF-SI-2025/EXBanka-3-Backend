@@ -42,13 +42,15 @@ func Migrate(db *gorm.DB) error {
 }
 
 func withMigrationLock(db *gorm.DB, migrate func(*gorm.DB) error) error {
-	if db.Dialector.Name() != "postgres" {
-		return migrate(db)
-	}
-
 	return db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", migrationAdvisoryLockID).Error; err != nil {
-			return fmt.Errorf("failed to acquire migration advisory lock: %w", err)
+		// On PostgreSQL, serialize concurrent migrators (several replicas
+		// booting at once) behind a transaction-scoped advisory lock. Other
+		// dialects (sqlite in tests) have no such helper and run the migrate
+		// directly inside the same transaction.
+		if tx.Dialector.Name() == "postgres" {
+			if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", migrationAdvisoryLockID).Error; err != nil {
+				return fmt.Errorf("failed to acquire migration advisory lock: %w", err)
+			}
 		}
 		return migrate(tx)
 	})
