@@ -622,16 +622,17 @@ func (s *FundService) GetPerformance(fundID uint, granularity string) ([]models.
 
 // --- Buy-for-fund pre-flight ---
 
-// ValidateFundBuyOrder ensures that the supervisor `actorID` manages the fund
-// `fundID`, that the order's account is the fund's own account, and that the
-// fund's account is active. Called by the HTTP handler before delegating to
+// ValidateFundBuyOrder ensures that the caller may trade for the fund — either
+// the managing supervisor (`actorID == fund.ManagerID`) or an admin (`isAdmin`,
+// admin override) — that the order's account is the fund's own account, and that
+// the fund's account is active. Called by the HTTP handler before delegating to
 // OrderService.CreateOrder.
-func (s *FundService) ValidateFundBuyOrder(fundID, actorID uint, accountID uint) (*models.InvestmentFundRecord, error) {
+func (s *FundService) ValidateFundBuyOrder(fundID, actorID uint, isAdmin bool, accountID uint) (*models.InvestmentFundRecord, error) {
 	fund, err := s.GetFund(fundID)
 	if err != nil {
 		return nil, err
 	}
-	if fund.ManagerID != actorID {
+	if fund.ManagerID != actorID && !isAdmin {
 		return nil, fmt.Errorf("supervisor ne upravlja ovim fondom")
 	}
 	if accountID != fund.AccountID {
@@ -645,6 +646,25 @@ func (s *FundService) ValidateFundBuyOrder(fundID, actorID uint, accountID uint)
 		return nil, fmt.Errorf("racun fonda nije aktivan")
 	}
 	return fund, nil
+}
+
+// IsFundAccount reports whether accountID is an investment fund's dedicated
+// RSD cash account (podvrsta='fondacija'). Used as a defence-in-depth guard in
+// the order handler so a plain bank/client order can't be placed against a
+// fund's cash account without going through the fund-order path — otherwise the
+// fund's cash is debited but the resulting holding lands on the bank.
+func (s *FundService) IsFundAccount(accountID uint) (bool, error) {
+	if accountID == 0 {
+		return false, nil
+	}
+	acc, err := s.fundRepo.GetAccountByID(accountID)
+	if err != nil {
+		return false, err
+	}
+	if acc == nil {
+		return false, nil
+	}
+	return acc.IsFundAccount(), nil
 }
 
 // --- Helpers ---

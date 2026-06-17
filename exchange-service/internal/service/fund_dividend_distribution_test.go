@@ -106,7 +106,7 @@ func TestFundService_DistributeFundDividends_Payout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFund: %v", err)
 	}
-	if _, err := svc.SetDividendPolicy(fund.ID, 6, models.FundDividendPolicyPayout); err != nil {
+	if _, err := svc.SetDividendPolicy(fund.ID, 6, false, models.FundDividendPolicyPayout); err != nil {
 		t.Fatalf("SetDividendPolicy: %v", err)
 	}
 
@@ -145,7 +145,7 @@ func TestFundService_DistributeFundDividends_PayoutNotifies(t *testing.T) {
 	svc := newFundSvc(db).WithNotifier(notify.NewClient("http://127.0.0.1:0", "k"))
 
 	fund, _ := svc.CreateFund(service.CreateFundInput{Naziv: "Notify Fund", Opis: "x", MinimalniUlog: 1000, ManagerID: 6})
-	_, _ = svc.SetDividendPolicy(fund.ID, 6, models.FundDividendPolicyPayout)
+	_, _ = svc.SetDividendPolicy(fund.ID, 6, false, models.FundDividendPolicyPayout)
 	assetID := seedDivStock(t, db, "FPN", "USD", 100, 0.04)
 	seedHolding(t, db, fund.ID, "fund", assetID, 100, fund.AccountID)
 	db.Exec(`INSERT INTO accounts (id, currency_id, status, client_id) VALUES (95, 1, 'aktivan', 9)`)
@@ -165,16 +165,20 @@ func TestFundService_SetDividendPolicy_Guards(t *testing.T) {
 	svc := newFundSvc(db)
 	fund, _ := svc.CreateFund(service.CreateFundInput{Naziv: "Guard Fund", Opis: "x", MinimalniUlog: 1000, ManagerID: 6})
 
-	// Wrong manager.
-	if _, err := svc.SetDividendPolicy(fund.ID, 999, models.FundDividendPolicyPayout); err == nil {
+	// Wrong manager, not admin.
+	if _, err := svc.SetDividendPolicy(fund.ID, 999, false, models.FundDividendPolicyPayout); err == nil {
 		t.Error("expected error for non-manager")
 	}
+	// Non-manager but admin → allowed (admin override).
+	if _, err := svc.SetDividendPolicy(fund.ID, 999, true, models.FundDividendPolicyReinvest); err != nil {
+		t.Errorf("expected admin override to succeed, got %v", err)
+	}
 	// Invalid policy.
-	if _, err := svc.SetDividendPolicy(fund.ID, 6, "bogus"); err == nil {
+	if _, err := svc.SetDividendPolicy(fund.ID, 6, false, "bogus"); err == nil {
 		t.Error("expected error for invalid policy")
 	}
-	// Valid.
-	updated, err := svc.SetDividendPolicy(fund.ID, 6, models.FundDividendPolicyPayout)
+	// Valid (manager).
+	updated, err := svc.SetDividendPolicy(fund.ID, 6, false, models.FundDividendPolicyPayout)
 	if err != nil || updated.DividendPolicy != models.FundDividendPolicyPayout {
 		t.Errorf("expected policy update to payout, got %v err=%v", updated, err)
 	}

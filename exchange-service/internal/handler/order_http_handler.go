@@ -128,13 +128,28 @@ func (h *OrderHTTPHandler) createOrder(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"message": "samo supervisor moze trgovati za fond"})
 			return
 		}
-		fund, err := h.fundSvc.ValidateFundBuyOrder(body.FundID, claims.EmployeeID, body.AccountID)
+		fund, err := h.fundSvc.ValidateFundBuyOrder(body.FundID, claims.EmployeeID, util.HasPermission(claims, models.PermEmployeeAdmin), body.AccountID)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 			return
 		}
 		userID = fund.ID
 		userType = models.PortfolioOwnerFund
+	} else if h.fundSvc != nil && body.AccountID != 0 {
+		// Defence-in-depth: a fund's dedicated cash account may only be traded
+		// against through the fund-order path above (fundId set + supervisor
+		// validation). Reject a plain bank/client order that targets a fund
+		// account — otherwise the fund's cash is debited but the holding lands
+		// on the order owner (bank/client), silently draining the fund.
+		isFund, err := h.fundSvc.IsFundAccount(body.AccountID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "neuspela provera računa"})
+			return
+		}
+		if isFund {
+			writeJSON(w, http.StatusForbidden, map[string]string{"message": "ovaj račun pripada investicionom fondu — kupovina mora ići kroz fond, ne kao obična bankarska/klijentska kupovina"})
+			return
+		}
 	}
 
 	// Auto-detect order type from provided values when the client sends "market".

@@ -63,13 +63,13 @@ func TestFundService_RecordDailyPerformanceAndValidateBuy(t *testing.T) {
 	}
 
 	// ValidateFundBuyOrder: manager + fund account ok; wrong manager / wrong account rejected.
-	if _, err := e.svc.ValidateFundBuyOrder(fund.ID, 5, fund.AccountID); err != nil {
+	if _, err := e.svc.ValidateFundBuyOrder(fund.ID, 5, false, fund.AccountID); err != nil {
 		t.Errorf("valid buy-order preflight failed: %v", err)
 	}
-	if _, err := e.svc.ValidateFundBuyOrder(fund.ID, 999, fund.AccountID); err == nil {
+	if _, err := e.svc.ValidateFundBuyOrder(fund.ID, 999, false, fund.AccountID); err == nil {
 		t.Error("non-manager should be rejected")
 	}
-	if _, err := e.svc.ValidateFundBuyOrder(fund.ID, 5, 99999); err == nil {
+	if _, err := e.svc.ValidateFundBuyOrder(fund.ID, 5, false, 99999); err == nil {
 		t.Error("wrong account should be rejected")
 	}
 }

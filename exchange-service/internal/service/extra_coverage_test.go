@@ -178,16 +178,20 @@ func TestFundService_ValidateFundBuyOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create fund: %v", err)
 	}
-	// Wrong actor.
-	if _, err := svc.ValidateFundBuyOrder(fund.ID, 99, fund.AccountID); err == nil {
+	// Wrong actor, not admin.
+	if _, err := svc.ValidateFundBuyOrder(fund.ID, 99, false, fund.AccountID); err == nil {
 		t.Fatal("expected wrong-supervisor error")
 	}
+	// Wrong actor but admin → allowed (admin override).
+	if _, err := svc.ValidateFundBuyOrder(fund.ID, 99, true, fund.AccountID); err != nil {
+		t.Fatalf("expected admin override to succeed, got %v", err)
+	}
 	// Wrong account.
-	if _, err := svc.ValidateFundBuyOrder(fund.ID, 1, 99999); err == nil {
+	if _, err := svc.ValidateFundBuyOrder(fund.ID, 1, false, 99999); err == nil {
 		t.Fatal("expected wrong-account error")
 	}
 	// Correct.
-	if _, err := svc.ValidateFundBuyOrder(fund.ID, 1, fund.AccountID); err != nil {
+	if _, err := svc.ValidateFundBuyOrder(fund.ID, 1, false, fund.AccountID); err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
 }

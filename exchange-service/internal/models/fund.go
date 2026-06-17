@@ -54,6 +54,28 @@ type FundDividendRecord struct {
 
 func (FundDividendRecord) TableName() string { return "fund_dividends" }
 
+// FundDividendPayoutRecord is the per-participant breakdown of a fund-dividend
+// distribution under the "payout" policy: one row per participant who received
+// cash, keyed to its parent FundDividendRecord by (fund_id, asset_id, period).
+// This is the "who was paid how much" audit trail the aggregate
+// FundDividendRecord (DistributedRSD only) lacks. Reinvest-policy distributions
+// produce no rows here (the cash buys shares instead of paying participants).
+type FundDividendPayoutRecord struct {
+	ID         uint      `gorm:"primaryKey"`
+	FundID     uint      `gorm:"column:fund_id;not null;index:idx_fund_div_payout_fund_asset_period"`
+	AssetID    uint      `gorm:"column:asset_id;not null;index:idx_fund_div_payout_fund_asset_period"`
+	Period     string    `gorm:"not null;index:idx_fund_div_payout_fund_asset_period"`
+	Ticker     string    `gorm:"not null"`
+	ClientID   uint      `gorm:"column:client_id;not null"`
+	ClientType string    `gorm:"column:client_type;not null"` // "client" or "bank"
+	AccountID  uint      `gorm:"column:account_id;not null"`
+	AmountRSD  float64   `gorm:"column:amount_rsd;not null"`
+	PaidAt     time.Time `gorm:"column:paid_at;not null"`
+	CreatedAt  time.Time
+}
+
+func (FundDividendPayoutRecord) TableName() string { return "fund_dividend_payouts" }
+
 const (
 	FundTransactionStatusPending   = "pending"
 	FundTransactionStatusCompleted = "completed"
