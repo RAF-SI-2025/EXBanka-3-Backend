@@ -458,7 +458,7 @@ func (h *FundHTTPHandler) validateFundOrder(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "fond nije pronadjen"})
 		return
 	}
-	if _, err := h.svc.ValidateFundBuyOrder(fundID, claims.EmployeeID, fund.AccountID); err != nil {
+	if _, err := h.svc.ValidateFundBuyOrder(fundID, claims.EmployeeID, util.HasPermission(claims, models.PermEmployeeAdmin), fund.AccountID); err != nil {
 		writeJSON(w, http.StatusForbidden, map[string]string{"message": err.Error()})
 		return
 	}
@@ -525,7 +525,31 @@ func (h *FundHTTPHandler) listFundDividends(w http.ResponseWriter, r *http.Reque
 			"paidAt":           d.PaidAt.UTC().Format(time.RFC3339),
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"dividends": items, "count": len(items)})
+
+	// Per-participant payout breakdown (payout-policy distributions). Best-effort:
+	// a read failure leaves the payouts list empty rather than failing the call.
+	payoutItems := make([]map[string]interface{}, 0)
+	if payouts, perr := h.svc.ListFundDividendPayouts(fundID); perr == nil {
+		for _, p := range payouts {
+			payoutItems = append(payoutItems, map[string]interface{}{
+				"id":         p.ID,
+				"assetId":    p.AssetID,
+				"ticker":     p.Ticker,
+				"period":     p.Period,
+				"clientId":   p.ClientID,
+				"clientType": p.ClientType,
+				"accountId":  p.AccountID,
+				"amountRSD":  p.AmountRSD,
+				"paidAt":     p.PaidAt.UTC().Format(time.RFC3339),
+			})
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"dividends": items,
+		"count":     len(items),
+		"payouts":   payoutItems,
+	})
 }
 
 func (h *FundHTTPHandler) setDividendPolicy(w http.ResponseWriter, r *http.Request, fundID uint) {
@@ -543,7 +567,8 @@ func (h *FundHTTPHandler) setDividendPolicy(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "neispravan zahtev"})
 		return
 	}
-	fund, err := h.svc.SetDividendPolicy(fundID, claims.EmployeeID, body.Policy)
+	isAdmin := util.HasPermission(claims, models.PermEmployeeAdmin)
+	fund, err := h.svc.SetDividendPolicy(fundID, claims.EmployeeID, isAdmin, body.Policy)
 	if err != nil {
 		if errors.Is(err, service.ErrFundNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"message": "fond nije pronadjen"})

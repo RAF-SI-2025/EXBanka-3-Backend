@@ -124,6 +124,16 @@ func (s *FundService) processFundDividend(fund *models.InvestmentFundRecord, h r
 				if err := repository.CreditAccountTx(tx, t.AccountID, t.AmountRSD); err != nil {
 					return err
 				}
+				// Persist the per-participant audit row so the UI can show who
+				// received how much (keyed to the parent dividend by
+				// fund_id + asset_id + period).
+				if err := tx.Create(&models.FundDividendPayoutRecord{
+					FundID: fund.ID, AssetID: h.AssetID, Period: period, Ticker: h.Ticker,
+					ClientID: t.ClientID, ClientType: t.ClientType, AccountID: t.AccountID,
+					AmountRSD: t.AmountRSD, PaidAt: now.UTC(),
+				}).Error; err != nil {
+					return err
+				}
 				distributed = round2RSD(distributed + t.AmountRSD)
 			}
 			rec.DistributedRSD = distributed
@@ -252,8 +262,15 @@ func (s *FundService) ListFundDividends(fundID uint) ([]models.FundDividendRecor
 	return s.fundRepo.ListFundDividends(fundID)
 }
 
-// SetDividendPolicy updates a fund's dividend policy (manager only).
-func (s *FundService) SetDividendPolicy(fundID, actorID uint, policy string) (*models.InvestmentFundRecord, error) {
+// ListFundDividendPayouts returns the per-participant payout breakdown for a
+// fund's payout-policy distributions.
+func (s *FundService) ListFundDividendPayouts(fundID uint) ([]models.FundDividendPayoutRecord, error) {
+	return s.fundRepo.ListFundDividendPayouts(fundID)
+}
+
+// SetDividendPolicy updates a fund's dividend policy. The managing supervisor
+// may change their own fund; an admin may change any fund (admin override).
+func (s *FundService) SetDividendPolicy(fundID, actorID uint, isAdmin bool, policy string) (*models.InvestmentFundRecord, error) {
 	if policy != models.FundDividendPolicyReinvest && policy != models.FundDividendPolicyPayout {
 		return nil, fmt.Errorf("nepoznata politika dividendi: %s", policy)
 	}
@@ -261,7 +278,7 @@ func (s *FundService) SetDividendPolicy(fundID, actorID uint, policy string) (*m
 	if err != nil {
 		return nil, err
 	}
-	if fund.ManagerID != actorID {
+	if fund.ManagerID != actorID && !isAdmin {
 		return nil, fmt.Errorf("supervisor ne upravlja ovim fondom")
 	}
 	if err := s.fundRepo.UpdateDividendPolicy(fundID, policy); err != nil {

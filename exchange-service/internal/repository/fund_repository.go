@@ -389,6 +389,17 @@ func (r *FundRepository) ListFundDividends(fundID uint) ([]models.FundDividendRe
 	return recs, nil
 }
 
+// ListFundDividendPayouts returns the per-participant payout breakdown for a
+// fund (newest first) — the "who got how much" audit trail for payout-policy
+// distributions.
+func (r *FundRepository) ListFundDividendPayouts(fundID uint) ([]models.FundDividendPayoutRecord, error) {
+	var recs []models.FundDividendPayoutRecord
+	if err := r.db.Where("fund_id = ?", fundID).Order("paid_at DESC, id DESC").Find(&recs).Error; err != nil {
+		return nil, err
+	}
+	return recs, nil
+}
+
 // FindParticipantRSDAccount returns an active RSD account for a fund participant
 // (client_id for clients; a non-state firm account for the bank), or 0 if none.
 func (r *FundRepository) FindParticipantRSDAccount(clientID uint, clientType string) (uint, error) {
